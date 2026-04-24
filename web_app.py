@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hmac
 import json
 import mimetypes
 import os
@@ -32,6 +35,7 @@ COLORS_EXAMPLE_PATH = ROOT_DIR / "colors.example.json"
 DEFAULT_FALLBACK_COLORS = ["#F4CCCC", "#D9EAD3", "#CFE2F3", "#FFF2CC"]
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+AUTH_REALM = "Holy Colours"
 
 MIME_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -60,6 +64,45 @@ class WebAppError(Exception):
 
 def now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def auth_credentials() -> tuple[str, str] | None:
+    username = os.environ.get("HOLY_COLOURS_AUTH_USERNAME", "")
+    password = os.environ.get("HOLY_COLOURS_AUTH_PASSWORD", "")
+    if not username and not password:
+        return None
+    if not username or not password:
+        raise WebAppError(
+            "HOLY_COLOURS_AUTH_USERNAME und HOLY_COLOURS_AUTH_PASSWORD müssen beide gesetzt sein.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+    return username, password
+
+
+def is_authorized(
+    authorization_header: str | None,
+    credentials: tuple[str, str] | None = None,
+) -> bool:
+    credentials = auth_credentials() if credentials is None else credentials
+    if credentials is None:
+        return True
+    if not authorization_header or not authorization_header.startswith("Basic "):
+        return False
+
+    encoded = authorization_header.removeprefix("Basic ").strip()
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return False
+    expected_username, expected_password = credentials
+    return hmac.compare_digest(username, expected_username) and hmac.compare_digest(
+        password,
+        expected_password,
+    )
 
 
 def normalize_color(value: object, field: str) -> str:
@@ -390,6 +433,11 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             path = self.path.split("?", 1)[0]
+            if path == "/api/health":
+                self.respond_json({"ok": True})
+                return
+            if not self.require_auth():
+                return
             if path == "/":
                 self.respond_bytes(
                     build_index_html().encode("utf-8"),
@@ -408,6 +456,8 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if not self.require_auth():
+                return
             path = self.path.split("?", 1)[0]
             if path == "/api/presets":
                 preset = save_preset(parse_json_body(self))
@@ -441,6 +491,8 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         try:
+            if not self.require_auth():
+                return
             prefix = "/api/presets/"
             path = self.path.split("?", 1)[0]
             if path.startswith(prefix):
@@ -469,10 +521,24 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
 
+    def require_auth(self) -> bool:
+        if is_authorized(self.headers.get("Authorization")):
+            return True
+        self.respond_auth_required()
+        return False
+
     def respond_json(
         self, value: object, status: HTTPStatus = HTTPStatus.OK
     ) -> None:
         self.respond_bytes(json_bytes(value), "application/json; charset=utf-8", status)
+
+    def respond_auth_required(self) -> None:
+        self.respond_bytes(
+            json_bytes({"error": "Authentifizierung erforderlich."}),
+            "application/json; charset=utf-8",
+            HTTPStatus.UNAUTHORIZED,
+            {"WWW-Authenticate": f'Basic realm="{AUTH_REALM}", charset="UTF-8"'},
+        )
 
     def respond_error(
         self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST

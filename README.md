@@ -56,21 +56,8 @@ Passe anschließend `.env` an:
 - `HOLY_COLOURS_DOMAIN`: deine Subdomain
 - `TRAEFIK_ENTRYPOINT`: meist `websecure`
 - `TRAEFIK_CERTRESOLVER`: Name deines bestehenden Let's-Encrypt-Resolvers
-- `HOLY_COLOURS_BASIC_AUTH`: Basic-Auth-Zugangsdaten für Traefik
-
-Den Basic-Auth-Hash kannst du zum Beispiel mit `htpasswd` erzeugen:
-
-```bash
-htpasswd -nbB admin 'dein-sicheres-passwort'
-```
-
-Wenn du den Hash in `.env` einträgst, müssen Dollarzeichen doppelt geschrieben werden. Aus `admin:$2y$05$...` wird also `admin:$$2y$$05$$...`.
-
-Falls `htpasswd` auf dem VPS fehlt, kannst du ihn über einen temporären Container erzeugen:
-
-```bash
-docker run --rm httpd:2.4-alpine htpasswd -nbB admin 'dein-sicheres-passwort'
-```
+- `HOLY_COLOURS_AUTH_USERNAME`: Benutzername für die App
+- `HOLY_COLOURS_AUTH_PASSWORD`: starkes Passwort für die App
 
 ### Starten und aktualisieren
 
@@ -80,7 +67,7 @@ Starte die App:
 docker compose up -d --build
 ```
 
-Die App veröffentlicht nur `127.0.0.1:8000` auf dem Host. Das passt zu Traefik im Host-Netzwerk: Traefik kann die App lokal erreichen, der Port ist aber nicht direkt auf der öffentlichen VPS-IP geöffnet. Traefik schützt den öffentlichen Zugriff per Basic Auth.
+Die App veröffentlicht nur `127.0.0.1:8000` auf dem Host. Das passt zu Traefik im Host-Netzwerk: Traefik kann die App lokal erreichen, der Port ist aber nicht direkt auf der öffentlichen VPS-IP geöffnet. Traefik übernimmt HTTPS, die App schützt den Zugriff per eigener HTTP Basic Auth.
 
 Presets werden im Docker-Volume `holy-colours-data` gespeichert.
 

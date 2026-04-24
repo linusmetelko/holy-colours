@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 import unittest
 import zipfile
@@ -14,6 +15,22 @@ W_NS = web_app.highlight_names.W_NS
 
 
 class WebAppTests(unittest.TestCase):
+    def test_basic_auth_accepts_matching_credentials(self) -> None:
+        header = "Basic " + base64.b64encode(b"admin:secret").decode("ascii")
+
+        self.assertTrue(web_app.is_authorized(header, ("admin", "secret")))
+
+    def test_basic_auth_rejects_missing_or_wrong_credentials(self) -> None:
+        wrong_password = "Basic " + base64.b64encode(b"admin:wrong").decode("ascii")
+
+        self.assertFalse(web_app.is_authorized(None, ("admin", "secret")))
+        self.assertFalse(web_app.is_authorized("Bearer token", ("admin", "secret")))
+        self.assertFalse(web_app.is_authorized("Basic not-base64", ("admin", "secret")))
+        self.assertFalse(web_app.is_authorized(wrong_password, ("admin", "secret")))
+
+    def test_basic_auth_is_disabled_without_credentials(self) -> None:
+        self.assertTrue(web_app.is_authorized(None, None))
+
     def test_save_update_and_delete_preset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             presets_path = Path(tmp_dir) / "presets.json"

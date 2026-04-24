@@ -9,6 +9,8 @@ services:
       HOLY_COLOURS_HOST: 0.0.0.0
       HOLY_COLOURS_PORT: 8000
       HOLY_COLOURS_PRESETS_PATH: /data/presets.json
+      HOLY_COLOURS_AUTH_USERNAME: ${HOLY_COLOURS_AUTH_USERNAME:?Set HOLY_COLOURS_AUTH_USERNAME}
+      HOLY_COLOURS_AUTH_PASSWORD: ${HOLY_COLOURS_AUTH_PASSWORD:?Set HOLY_COLOURS_AUTH_PASSWORD}
     volumes:
       - holy-colours-data:/data
     ports:
@@ -19,8 +21,6 @@ services:
       - traefik.http.routers.holy-colours.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
       - traefik.http.routers.holy-colours.tls=true
       - traefik.http.routers.holy-colours.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
-      - traefik.http.routers.holy-colours.middlewares=holy-colours-auth@docker
-      - traefik.http.middlewares.holy-colours-auth.basicauth.users=${HOLY_COLOURS_BASIC_AUTH:?Set HOLY_COLOURS_BASIC_AUTH}
       - traefik.http.services.holy-colours.loadbalancer.server.port=8000
 
 volumes:
