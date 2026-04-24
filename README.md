@@ -67,7 +67,7 @@ Starte die App:
 docker compose up -d --build
 ```
 
-Die App veröffentlicht nur `127.0.0.1:8000` auf dem Host. Das passt zu Traefik im Host-Netzwerk: Traefik kann die App lokal erreichen, der Port ist aber nicht direkt auf der öffentlichen VPS-IP geöffnet. Traefik übernimmt HTTPS, die App schützt den Zugriff per eigener HTTP Basic Auth.
+Die App veröffentlicht nur `127.0.0.1:8000` auf dem Host. Das passt zu Traefik im Host-Netzwerk: Traefik kann die App lokal erreichen, der Port ist aber nicht direkt auf der öffentlichen VPS-IP geöffnet. Traefik übernimmt HTTPS, die App schützt den Zugriff per eigenem Login-Screen.
 
 Presets werden im Docker-Volume `holy-colours-data` gespeichert.
 

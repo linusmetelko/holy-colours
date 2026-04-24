@@ -6,6 +6,7 @@ const state = {
   selectedPresetId: '',
   nameColors: { ...(defaultConfig.name_colors || {}) },
   fallbackColors: [...(defaultConfig.fallback_colors || ['#F4CCCC'])],
+  authenticated: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -20,6 +21,77 @@ function setStatus(message, kind = '') {
   toastTimer = setTimeout(() => {
     toastEl.classList.remove('visible');
   }, kind === 'error' ? 6000 : 3500);
+}
+
+/* ---- Auth ---- */
+function showLogin() {
+  state.authenticated = false;
+  el('app-shell').classList.add('hidden');
+  el('login-screen').classList.remove('hidden');
+  el('login-password').value = '';
+  setTimeout(() => el('login-username').focus(), 0);
+}
+
+function showApp() {
+  state.authenticated = true;
+  el('login-screen').classList.add('hidden');
+  el('app-shell').classList.remove('hidden');
+}
+
+async function apiFetch(url, options = {}) {
+  const response = await fetch(url, { credentials: 'same-origin', ...options });
+  if (response.status === 401) {
+    showLogin();
+    throw new Error('Bitte anmelden.');
+  }
+  return response;
+}
+
+async function checkSession() {
+  const response = await fetch('/api/session', { credentials: 'same-origin' });
+  const data = await response.json();
+  if (data.authenticated) {
+    showApp();
+    await loadPresets();
+  } else {
+    showLogin();
+  }
+}
+
+async function login() {
+  const username = el('login-username').value.trim();
+  const password = el('login-password').value;
+  const submit = el('login-submit');
+  const label = el('login-label');
+
+  submit.disabled = true;
+  label.innerHTML = '<span class="spinner"></span> Anmeldung läuft …';
+  try {
+    const response = await fetch('/api/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok)
+      throw new Error(data.error || 'Anmeldung fehlgeschlagen.');
+    showApp();
+    await loadPresets();
+    setStatus('Angemeldet.', 'ok');
+  } finally {
+    submit.disabled = false;
+    label.textContent = 'Anmelden';
+  }
+}
+
+async function logout() {
+  await fetch('/api/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+  });
+  showLogin();
+  setStatus('Abgemeldet.');
 }
 
 /* ---- Step indicator ---- */
@@ -169,7 +241,7 @@ function applyConfig(config) {
 
 /* ---- API calls ---- */
 async function loadPresets() {
-  const response = await fetch('/api/presets');
+  const response = await apiFetch('/api/presets');
   const data = await response.json();
   if (!response.ok)
     throw new Error(data.error || 'Presets konnten nicht geladen werden.');
@@ -181,7 +253,7 @@ async function savePreset() {
   const config = configFromUI();
   const name = el('preset-name').value.trim();
   if (!name) throw new Error('Bitte einen Preset-Namen eingeben.');
-  const response = await fetch('/api/presets', {
+  const response = await apiFetch('/api/presets', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -208,7 +280,7 @@ async function deletePreset() {
   );
   if (!confirmed) return;
 
-  const response = await fetch(
+  const response = await apiFetch(
     `/api/presets/${encodeURIComponent(state.selectedPresetId)}`,
     { method: 'DELETE' }
   );
@@ -269,7 +341,7 @@ async function processFile() {
     formData.append('file', file);
     formData.append('config', JSON.stringify(configFromUI()));
 
-    const response = await fetch('/api/process', {
+    const response = await apiFetch('/api/process', {
       method: 'POST',
       body: formData,
     });
@@ -376,6 +448,11 @@ el('new-preset').addEventListener('click', () => {
 el('save-preset').addEventListener('click', () => run(savePreset));
 el('delete-preset').addEventListener('click', () => run(deletePreset));
 el('process').addEventListener('click', () => run(processFile));
+el('logout').addEventListener('click', () => run(logout));
+el('login-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  run(login);
+});
 
 el('preset-select').addEventListener('change', (event) => {
   state.selectedPresetId = event.target.value;
@@ -392,4 +469,4 @@ el('preset-select').addEventListener('change', (event) => {
 /* ---- Init ---- */
 setupDropzone();
 applyConfig(defaultConfig);
-run(loadPresets);
+run(checkSession);

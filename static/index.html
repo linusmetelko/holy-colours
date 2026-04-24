@@ -10,7 +10,29 @@
 <body>
   <div id="status-toast" class="status-toast"></div>
 
-  <main>
+  <section id="login-screen" class="login-screen hidden" aria-labelledby="login-title">
+    <form id="login-form" class="login-panel">
+      <div class="logo login-logo">
+        <div class="logo-icon">🎨</div>
+        <div>
+          <h1 id="login-title">Holy Colours</h1>
+          <p class="subtitle">Anmelden, um DOCX-Dateien zu färben.</p>
+        </div>
+      </div>
+
+      <label for="login-username">Benutzername</label>
+      <input id="login-username" type="text" autocomplete="username" required>
+
+      <label for="login-password" style="margin-top:14px">Passwort</label>
+      <input id="login-password" type="password" autocomplete="current-password" required>
+
+      <button id="login-submit" type="submit" class="btn-primary login-submit">
+        <span id="login-label">Anmelden</span>
+      </button>
+    </form>
+  </section>
+
+  <main id="app-shell" class="hidden">
     <div class="header">
       <div class="header-top">
         <div class="logo">
@@ -20,6 +42,7 @@
             <p class="subtitle">DOCX hochladen · Sprecherfarben wählen · PDF exportieren</p>
           </div>
         </div>
+        <button id="logout" type="button">Abmelden</button>
       </div>
 
       <div class="steps">

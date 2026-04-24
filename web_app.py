@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -14,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 import zipfile
 from datetime import UTC, datetime
@@ -35,7 +37,8 @@ COLORS_EXAMPLE_PATH = ROOT_DIR / "colors.example.json"
 DEFAULT_FALLBACK_COLORS = ["#F4CCCC", "#D9EAD3", "#CFE2F3", "#FFF2CC"]
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-AUTH_REALM = "Holy Colours"
+SESSION_COOKIE_NAME = "holy_colours_session"
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 MIME_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -79,30 +82,67 @@ def auth_credentials() -> tuple[str, str] | None:
     return username, password
 
 
-def is_authorized(
-    authorization_header: str | None,
-    credentials: tuple[str, str] | None = None,
-) -> bool:
-    credentials = auth_credentials() if credentials is None else credentials
-    if credentials is None:
-        return True
-    if not authorization_header or not authorization_header.startswith("Basic "):
-        return False
+def session_secret(credentials: tuple[str, str]) -> bytes:
+    raw_secret = os.environ.get("HOLY_COLOURS_SESSION_SECRET", "")
+    if raw_secret:
+        return raw_secret.encode("utf-8")
+    return f"{credentials[0]}:{credentials[1]}".encode("utf-8")
 
-    encoded = authorization_header.removeprefix("Basic ").strip()
+
+def sign_session(username: str, issued_at: int, secret: bytes) -> str:
+    payload = f"{username}:{issued_at}"
+    signature = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    token = f"{payload}:{signature}".encode("utf-8")
+    return base64.urlsafe_b64encode(token).decode("ascii")
+
+
+def create_session_cookie(username: str, credentials: tuple[str, str]) -> str:
+    token = sign_session(username, int(time.time()), session_secret(credentials))
+    return (
+        f"{SESSION_COOKIE_NAME}={token}; Max-Age={SESSION_MAX_AGE_SECONDS}; "
+        "Path=/; HttpOnly; SameSite=Lax"
+    )
+
+
+def clear_session_cookie() -> str:
+    return f"{SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
+
+
+def parse_cookie_header(cookie_header: str | None) -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    if not cookie_header:
+        return cookies
+    for raw_part in cookie_header.split(";"):
+        name, separator, value = raw_part.strip().partition("=")
+        if separator and name:
+            cookies[name] = value
+    return cookies
+
+
+def is_valid_session(cookie_header: str | None, credentials: tuple[str, str]) -> bool:
+    token = parse_cookie_header(cookie_header).get(SESSION_COOKIE_NAME)
+    if not token:
+        return False
     try:
-        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+        decoded = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError):
         return False
 
-    username, separator, password = decoded.partition(":")
-    if not separator:
+    try:
+        username, raw_issued_at, signature = decoded.split(":", 2)
+    except ValueError:
         return False
-    expected_username, expected_password = credentials
-    return hmac.compare_digest(username, expected_username) and hmac.compare_digest(
-        password,
-        expected_password,
-    )
+    if username != credentials[0]:
+        return False
+    try:
+        issued_at = int(raw_issued_at)
+    except ValueError:
+        return False
+    if issued_at < int(time.time()) - SESSION_MAX_AGE_SECONDS:
+        return False
+
+    expected_token = sign_session(username, issued_at, session_secret(credentials))
+    return hmac.compare_digest(token, expected_token)
 
 
 def normalize_color(value: object, field: str) -> str:
@@ -436,7 +476,8 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
             if path == "/api/health":
                 self.respond_json({"ok": True})
                 return
-            if not self.require_auth():
+            if path == "/api/session":
+                self.respond_json(self.session_status())
                 return
             if path == "/":
                 self.respond_bytes(
@@ -444,11 +485,13 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
                     "text/html; charset=utf-8",
                 )
                 return
-            if path == "/api/presets":
-                self.respond_json({"presets": read_presets()})
-                return
             if path.startswith("/static/"):
                 self.serve_static(path)
+                return
+            if not self.require_auth():
+                return
+            if path == "/api/presets":
+                self.respond_json({"presets": read_presets()})
                 return
             self.respond_error("Nicht gefunden.", HTTPStatus.NOT_FOUND)
         except WebAppError as exc:
@@ -456,9 +499,15 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            path = self.path.split("?", 1)[0]
+            if path == "/api/login":
+                self.login()
+                return
+            if path == "/api/logout":
+                self.logout()
+                return
             if not self.require_auth():
                 return
-            path = self.path.split("?", 1)[0]
             if path == "/api/presets":
                 preset = save_preset(parse_json_body(self))
                 self.respond_json({"preset": preset})
@@ -521,23 +570,69 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
 
+    def session_status(self) -> dict[str, object]:
+        credentials = auth_credentials()
+        if credentials is None:
+            return {"auth_enabled": False, "authenticated": True}
+        return {
+            "auth_enabled": True,
+            "authenticated": is_valid_session(self.headers.get("Cookie"), credentials),
+        }
+
+    def login(self) -> None:
+        credentials = auth_credentials()
+        if credentials is None:
+            self.respond_json({"ok": True, "authenticated": True})
+            return
+
+        payload = parse_json_body(self)
+        if not isinstance(payload, dict):
+            raise WebAppError("Login-Daten müssen als Objekt gesendet werden.")
+
+        username = str(payload.get("username") or "")
+        password = str(payload.get("password") or "")
+        if not hmac.compare_digest(username, credentials[0]) or not hmac.compare_digest(
+            password,
+            credentials[1],
+        ):
+            raise WebAppError("Benutzername oder Passwort ist falsch.", HTTPStatus.UNAUTHORIZED)
+
+        self.respond_json(
+            {"ok": True, "authenticated": True},
+            extra_headers={"Set-Cookie": create_session_cookie(username, credentials)},
+        )
+
+    def logout(self) -> None:
+        self.respond_json(
+            {"ok": True, "authenticated": False},
+            extra_headers={"Set-Cookie": clear_session_cookie()},
+        )
+
     def require_auth(self) -> bool:
-        if is_authorized(self.headers.get("Authorization")):
+        credentials = auth_credentials()
+        if credentials is None or is_valid_session(self.headers.get("Cookie"), credentials):
             return True
         self.respond_auth_required()
         return False
 
     def respond_json(
-        self, value: object, status: HTTPStatus = HTTPStatus.OK
+        self,
+        value: object,
+        status: HTTPStatus = HTTPStatus.OK,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
-        self.respond_bytes(json_bytes(value), "application/json; charset=utf-8", status)
+        self.respond_bytes(
+            json_bytes(value),
+            "application/json; charset=utf-8",
+            status,
+            extra_headers,
+        )
 
     def respond_auth_required(self) -> None:
         self.respond_bytes(
             json_bytes({"error": "Authentifizierung erforderlich."}),
             "application/json; charset=utf-8",
             HTTPStatus.UNAUTHORIZED,
-            {"WWW-Authenticate": f'Basic realm="{AUTH_REALM}", charset="UTF-8"'},
         )
 
     def respond_error(

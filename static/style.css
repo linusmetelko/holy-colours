@@ -244,6 +244,7 @@ label {
 label + label { margin-top: 14px; }
 
 input[type="text"],
+input[type="password"],
 select {
   width: 100%;
   padding: 10px 12px;
@@ -258,12 +259,45 @@ select {
 }
 
 input[type="text"]:focus,
+input[type="password"]:focus,
 select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
 
 input[type="text"]::placeholder { color: var(--ink-muted); }
+input[type="password"]::placeholder { color: var(--ink-muted); }
+
+.hidden { display: none !important; }
+
+/* Login */
+.login-screen {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  padding: 28px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+}
+
+.login-logo {
+  margin-bottom: 24px;
+}
+
+.login-submit {
+  width: 100%;
+  justify-content: center;
+  margin-top: 20px;
+}
 
 select {
   appearance: none;

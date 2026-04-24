@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import tempfile
 import unittest
 import zipfile
@@ -15,21 +14,17 @@ W_NS = web_app.highlight_names.W_NS
 
 
 class WebAppTests(unittest.TestCase):
-    def test_basic_auth_accepts_matching_credentials(self) -> None:
-        header = "Basic " + base64.b64encode(b"admin:secret").decode("ascii")
+    def test_session_cookie_accepts_matching_credentials(self) -> None:
+        cookie = web_app.create_session_cookie("admin", ("admin", "secret"))
 
-        self.assertTrue(web_app.is_authorized(header, ("admin", "secret")))
+        self.assertTrue(web_app.is_valid_session(cookie, ("admin", "secret")))
 
-    def test_basic_auth_rejects_missing_or_wrong_credentials(self) -> None:
-        wrong_password = "Basic " + base64.b64encode(b"admin:wrong").decode("ascii")
+    def test_session_cookie_rejects_missing_or_wrong_credentials(self) -> None:
+        cookie = web_app.create_session_cookie("admin", ("admin", "secret"))
 
-        self.assertFalse(web_app.is_authorized(None, ("admin", "secret")))
-        self.assertFalse(web_app.is_authorized("Bearer token", ("admin", "secret")))
-        self.assertFalse(web_app.is_authorized("Basic not-base64", ("admin", "secret")))
-        self.assertFalse(web_app.is_authorized(wrong_password, ("admin", "secret")))
-
-    def test_basic_auth_is_disabled_without_credentials(self) -> None:
-        self.assertTrue(web_app.is_authorized(None, None))
+        self.assertFalse(web_app.is_valid_session(None, ("admin", "secret")))
+        self.assertFalse(web_app.is_valid_session("holy_colours_session=not-base64", ("admin", "secret")))
+        self.assertFalse(web_app.is_valid_session(cookie, ("admin", "changed")))
 
     def test_save_update_and_delete_preset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
