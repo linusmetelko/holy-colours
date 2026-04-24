@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Holy Colours</title>
+  <meta name="description" content="Lokale Produktions-App zum Einfärben von DOCX-Sprechernamen und PDF-Export.">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="status-toast" class="status-toast"></div>
+
+  <main>
+    <div class="header">
+      <div class="header-top">
+        <div class="logo">
+          <div class="logo-icon">🎨</div>
+          <div>
+            <h1>Holy Colours</h1>
+            <p class="subtitle">DOCX hochladen · Sprecherfarben wählen · PDF exportieren</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step-pill active" data-step="1">
+          <span class="num">1</span> Produktion wählen
+        </div>
+        <span class="step-connector">→</span>
+        <div class="step-pill" data-step="2">
+          <span class="num">2</span> Farben konfigurieren
+        </div>
+        <span class="step-connector">→</span>
+        <div class="step-pill" data-step="3">
+          <span class="num">3</span> PDF erstellen
+        </div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div>
+        <!-- Preset card -->
+        <div class="card">
+          <div class="card-title"><span class="icon">📂</span> Produktion</div>
+
+          <label for="preset-select">Preset</label>
+          <select id="preset-select"></select>
+
+          <label for="preset-name" style="margin-top:14px">Name</label>
+          <input id="preset-name" type="text" placeholder="z. B. Folge 85">
+
+          <div class="btn-row">
+            <button id="new-preset" type="button">✦ Neu</button>
+            <button id="save-preset" type="button">💾 Speichern</button>
+            <button id="delete-preset" type="button" class="btn-danger">🗑 Löschen</button>
+          </div>
+        </div>
+
+        <!-- Export card -->
+        <div class="card">
+          <div class="card-title"><span class="icon">📄</span> Export</div>
+
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-icon">📎</div>
+            <div class="dropzone-text"><strong>Klicken</strong> oder Datei hierher ziehen</div>
+            <div class="dropzone-text" style="font-size:.78rem;margin-top:4px;color:var(--ink-muted)">.docx-Dateien</div>
+            <input id="docx-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+          </div>
+          <div id="file-info-container"></div>
+
+          <div class="btn-row">
+            <button id="process" type="button" class="btn-primary" style="width:100%">
+              <span id="process-label">PDF erstellen</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <!-- Name colors -->
+        <div class="card">
+          <div class="panel-head">
+            <div class="card-title"><span class="icon">🎭</span> Sprecherfarben</div>
+            <button id="add-name" type="button">+ Name</button>
+          </div>
+          <div id="name-colors"></div>
+        </div>
+
+        <!-- Fallback colors -->
+        <div class="card">
+          <div class="panel-head">
+            <div class="card-title"><span class="icon">🔄</span> Fallbackfarben</div>
+            <button id="add-fallback" type="button">+ Farbe</button>
+          </div>
+          <p class="hint">Werden der Reihe nach für unbekannte Sprecher verwendet.</p>
+          <div id="fallback-colors"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script id="default-config" type="application/json">__DEFAULT_CONFIG__</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

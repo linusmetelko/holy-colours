@@ -26,11 +26,27 @@ from xml.etree import ElementTree as ET
 import highlight_names
 
 ROOT_DIR = Path(__file__).resolve().parent
+STATIC_DIR = ROOT_DIR / "static"
 PRESETS_PATH = ROOT_DIR / "presets.json"
 COLORS_EXAMPLE_PATH = ROOT_DIR / "colors.example.json"
 DEFAULT_FALLBACK_COLORS = ["#F4CCCC", "#D9EAD3", "#CFE2F3", "#FFF2CC"]
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+MIME_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+}
+
+
+def load_index_template() -> str:
+    """Read the index.html template from the static directory."""
+    template_path = STATIC_DIR / "index.html"
+    return template_path.read_text(encoding="utf-8")
 
 
 class WebAppError(Exception):
@@ -365,7 +381,7 @@ def json_bytes(value: object) -> bytes:
 def build_index_html() -> str:
     default_config_json = json.dumps(load_default_config(), ensure_ascii=False)
     default_config_json = default_config_json.replace("</", "<\\/")
-    return INDEX_HTML.replace("__DEFAULT_CONFIG__", default_config_json)
+    return load_index_template().replace("__DEFAULT_CONFIG__", default_config_json)
 
 
 class HolyColoursHandler(BaseHTTPRequestHandler):
@@ -382,6 +398,9 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/presets":
                 self.respond_json({"presets": read_presets()})
+                return
+            if path.startswith("/static/"):
+                self.serve_static(path)
                 return
             self.respond_error("Nicht gefunden.", HTTPStatus.NOT_FOUND)
         except WebAppError as exc:
@@ -432,6 +451,21 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
         except WebAppError as exc:
             self.respond_error(exc.message, exc.status)
 
+    def serve_static(self, url_path: str) -> None:
+        """Serve a file from STATIC_DIR with directory-traversal protection."""
+        relative = url_path.removeprefix("/static/")
+        file_path = (STATIC_DIR / relative).resolve()
+        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
+            self.respond_error("Nicht erlaubt.", HTTPStatus.FORBIDDEN)
+            return
+        if not file_path.is_file():
+            self.respond_error("Nicht gefunden.", HTTPStatus.NOT_FOUND)
+            return
+        suffix = file_path.suffix.lower()
+        content_type = MIME_TYPES.get(suffix, "application/octet-stream")
+        body = file_path.read_bytes()
+        self.respond_bytes(body, content_type)
+
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
 
@@ -462,549 +496,6 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-INDEX_HTML = r"""<!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Holy Colours</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f4f1ec;
-      --surface: #ffffff;
-      --surface-soft: #faf9f6;
-      --ink: #1d2329;
-      --muted: #68717b;
-      --line: #dad5cc;
-      --line-strong: #bbb3a6;
-      --accent: #0f766e;
-      --accent-dark: #115e59;
-      --accent-soft: #d9efea;
-      --warn: #b95c37;
-      --danger: #a33c3c;
-      --danger-soft: #f4dfdd;
-      --focus: #b9e3dc;
-      --shadow: 0 18px 55px rgba(38, 35, 31, .12);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background:
-        linear-gradient(180deg, #ebe5dc 0, var(--bg) 320px),
-        var(--bg);
-      color: var(--ink);
-    }
-
-    main {
-      width: min(1180px, calc(100% - 40px));
-      margin: 0 auto;
-      padding: 36px 0 48px;
-    }
-
-    header {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 24px;
-      margin-bottom: 22px;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: 3.4rem;
-      line-height: 1;
-      letter-spacing: 0;
-    }
-
-    .eyebrow {
-      margin: 0 0 8px;
-      color: var(--accent-dark);
-      font-size: .78rem;
-      font-weight: 800;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-
-    .status {
-      min-height: 40px;
-      max-width: 360px;
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      border: 1px solid transparent;
-      border-radius: 8px;
-      padding: 9px 12px;
-      color: var(--muted);
-      text-align: right;
-      font-size: .95rem;
-      background: rgba(255, 255, 255, .56);
-    }
-
-    .status:empty { visibility: hidden; }
-    .status.error {
-      color: var(--danger);
-      border-color: #e2b7b2;
-      background: var(--danger-soft);
-    }
-    .status.ok {
-      color: var(--accent-dark);
-      border-color: #a9d7ce;
-      background: var(--accent-soft);
-    }
-
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(280px, 370px) minmax(0, 1fr);
-      gap: 18px;
-      align-items: start;
-    }
-
-    section,
-    aside {
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 20px;
-      box-shadow: var(--shadow);
-    }
-
-    h2 {
-      margin: 0 0 16px;
-      font-size: 1.05rem;
-      letter-spacing: 0;
-    }
-
-    .panel-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-
-    .panel-head h2 { margin: 0; }
-
-    label {
-      display: block;
-      margin: 12px 0 6px;
-      font-size: .82rem;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-    }
-
-    input,
-    select,
-    button {
-      font: inherit;
-    }
-
-    input[type="text"],
-    input[type="file"],
-    select {
-      width: 100%;
-      border: 1px solid var(--line-strong);
-      border-radius: 6px;
-      padding: 11px 12px;
-      background: var(--surface-soft);
-      color: var(--ink);
-    }
-
-    input[type="color"] {
-      width: 44px;
-      height: 44px;
-      padding: 2px;
-      border: 1px solid var(--line-strong);
-      border-radius: 6px;
-      background: var(--surface-soft);
-    }
-
-    button {
-      border: 1px solid var(--line-strong);
-      border-radius: 6px;
-      min-height: 40px;
-      padding: 9px 13px;
-      background: var(--surface);
-      color: var(--ink);
-      cursor: pointer;
-      font-weight: 700;
-      transition: border-color .15s ease, background-color .15s ease, color .15s ease, transform .15s ease;
-    }
-
-    button:hover {
-      border-color: #8f8578;
-      transform: translateY(-1px);
-    }
-    button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 3px solid var(--focus);
-      outline-offset: 1px;
-    }
-
-    .primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-      font-weight: 700;
-    }
-
-    .primary:hover { background: var(--accent-dark); }
-    .danger {
-      color: var(--danger);
-      border-color: #d7aaa5;
-      background: #fff8f7;
-    }
-
-    .button-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 12px;
-    }
-
-    .row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 44px minmax(94px, 118px) 40px;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 8px;
-      padding: 8px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--surface-soft);
-    }
-
-    .fallback-row {
-      grid-template-columns: 44px minmax(94px, 118px) 40px;
-      justify-content: start;
-    }
-
-    .icon-button {
-      width: 40px;
-      padding: 0;
-      font-weight: 700;
-    }
-
-    .muted {
-      color: var(--muted);
-      font-size: .92rem;
-      line-height: 1.45;
-    }
-
-    .stack { display: grid; gap: 18px; }
-    .divider {
-      height: 1px;
-      background: var(--line);
-      margin: 18px 0;
-    }
-
-    .hint {
-      margin: -6px 0 14px;
-      color: var(--muted);
-      font-size: .9rem;
-    }
-
-    .file-box {
-      border: 1px dashed var(--line-strong);
-      border-radius: 8px;
-      padding: 12px;
-      background: #fbfaf7;
-    }
-
-    @media (max-width: 820px) {
-      main { width: min(100% - 20px, 720px); padding-top: 22px; }
-      header { align-items: flex-start; flex-direction: column; }
-      h1 { font-size: 2.35rem; }
-      .status { justify-content: flex-start; text-align: left; max-width: 100%; }
-      .layout { grid-template-columns: 1fr; }
-      .row { grid-template-columns: minmax(0, 1fr) 44px minmax(82px, 104px) 40px; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <div>
-        <p class="eyebrow">Lokale Produktions-App</p>
-        <h1>Holy Colours</h1>
-        <p class="muted">DOCX hochladen, Sprecherfarben wählen, PDF laden.</p>
-      </div>
-      <div id="status" class="status"></div>
-    </header>
-
-    <div class="layout">
-      <aside>
-        <h2>Produktion</h2>
-        <label for="preset-select">Preset</label>
-        <select id="preset-select"></select>
-
-        <label for="preset-name">Name</label>
-        <input id="preset-name" type="text" placeholder="z. B. Folge 85">
-
-        <div class="button-row">
-          <button id="new-preset" type="button">Neu</button>
-          <button id="save-preset" type="button">Speichern</button>
-          <button id="delete-preset" type="button" class="danger">Löschen</button>
-        </div>
-
-        <div class="divider"></div>
-
-        <h2>Export</h2>
-        <div class="file-box">
-          <label for="docx-file">DOCX-Datei</label>
-          <input id="docx-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-        </div>
-        <div class="button-row">
-          <button id="process" type="button" class="primary">PDF erstellen</button>
-        </div>
-      </aside>
-
-      <section class="stack">
-        <div>
-          <div class="panel-head">
-            <h2>Sprecherfarben</h2>
-            <button id="add-name" type="button">+ Name</button>
-          </div>
-          <div id="name-colors"></div>
-        </div>
-
-        <div>
-          <div class="panel-head">
-            <h2>Fallbackfarben</h2>
-            <button id="add-fallback" type="button">+ Farbe</button>
-          </div>
-          <p class="hint">Diese Farben werden der Reihe nach für unbekannte Sprecher verwendet.</p>
-          <div id="fallback-colors"></div>
-        </div>
-      </section>
-    </div>
-  </main>
-
-  <script id="default-config" type="application/json">__DEFAULT_CONFIG__</script>
-  <script>
-    const defaultConfig = JSON.parse(document.getElementById('default-config').textContent);
-    const state = {
-      presets: [],
-      selectedPresetId: '',
-      nameColors: {...(defaultConfig.name_colors || {})},
-      fallbackColors: [...(defaultConfig.fallback_colors || ['#F4CCCC'])]
-    };
-
-    const el = (id) => document.getElementById(id);
-    const statusEl = el('status');
-
-    function setStatus(message, kind = '') {
-      statusEl.textContent = message;
-      statusEl.className = `status ${kind}`.trim();
-    }
-
-    function normalizeHex(value) {
-      const text = String(value || '').trim();
-      if (/^#[0-9a-fA-F]{6}$/.test(text)) return text.toUpperCase();
-      return null;
-    }
-
-    function configFromUI() {
-      const nameColors = {};
-      document.querySelectorAll('#name-colors .row').forEach((row) => {
-        const name = row.querySelector('[data-name]').value.trim();
-        const hex = normalizeHex(row.querySelector('[data-hex]').value);
-        if (name && hex) nameColors[name] = hex;
-      });
-
-      const fallbackColors = [];
-      document.querySelectorAll('#fallback-colors .fallback-row').forEach((row) => {
-        const hex = normalizeHex(row.querySelector('[data-hex]').value);
-        if (hex) fallbackColors.push(hex);
-      });
-
-      if (!fallbackColors.length) {
-        throw new Error('Mindestens eine gültige Fallbackfarbe ist notwendig.');
-      }
-      return { name_colors: nameColors, fallback_colors: fallbackColors };
-    }
-
-    function syncHexInputs(row, color) {
-      const colorInput = row.querySelector('[data-color]');
-      const hexInput = row.querySelector('[data-hex]');
-      colorInput.value = color;
-      hexInput.value = color;
-      colorInput.addEventListener('input', () => { hexInput.value = colorInput.value.toUpperCase(); });
-      hexInput.addEventListener('input', () => {
-        const hex = normalizeHex(hexInput.value);
-        if (hex) colorInput.value = hex;
-      });
-      hexInput.addEventListener('blur', () => {
-        const hex = normalizeHex(hexInput.value);
-        if (hex) hexInput.value = hex;
-      });
-    }
-
-    function renderNameRows(nameColors = state.nameColors) {
-      const container = el('name-colors');
-      container.innerHTML = '';
-      const entries = Object.entries(nameColors);
-      if (!entries.length) entries.push(['', '#FFD966']);
-      entries.forEach(([name, color]) => addNameRow(name, normalizeHex(color) || '#FFD966'));
-    }
-
-    function addNameRow(name = '', color = '#FFD966') {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.innerHTML = `
-        <input data-name type="text" placeholder="Sprechername">
-        <input data-color type="color">
-        <input data-hex type="text" inputmode="text" placeholder="#FFD966">
-        <button class="icon-button danger" type="button" title="Zeile entfernen">×</button>
-      `;
-      row.querySelector('[data-name]').value = name;
-      syncHexInputs(row, color);
-      row.querySelector('button').addEventListener('click', () => row.remove());
-      el('name-colors').appendChild(row);
-    }
-
-    function renderFallbackRows(colors = state.fallbackColors) {
-      const container = el('fallback-colors');
-      container.innerHTML = '';
-      const list = colors.length ? colors : ['#F4CCCC'];
-      list.forEach((color) => addFallbackRow(normalizeHex(color) || '#F4CCCC'));
-    }
-
-    function addFallbackRow(color = '#F4CCCC') {
-      const row = document.createElement('div');
-      row.className = 'row fallback-row';
-      row.innerHTML = `
-        <input data-color type="color">
-        <input data-hex type="text" inputmode="text" placeholder="#F4CCCC">
-        <button class="icon-button danger" type="button" title="Farbe entfernen">×</button>
-      `;
-      syncHexInputs(row, color);
-      row.querySelector('button').addEventListener('click', () => row.remove());
-      el('fallback-colors').appendChild(row);
-    }
-
-    function renderPresetSelect() {
-      const select = el('preset-select');
-      select.innerHTML = '<option value="">Aktuelle Einstellungen</option>';
-      state.presets.forEach((preset) => {
-        const option = document.createElement('option');
-        option.value = preset.id;
-        option.textContent = preset.name;
-        select.appendChild(option);
-      });
-      select.value = state.selectedPresetId;
-    }
-
-    function applyConfig(config) {
-      state.nameColors = {...(config.name_colors || {})};
-      state.fallbackColors = [...(config.fallback_colors || ['#F4CCCC'])];
-      renderNameRows();
-      renderFallbackRows();
-    }
-
-    async function loadPresets() {
-      const response = await fetch('/api/presets');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Presets konnten nicht geladen werden.');
-      state.presets = data.presets || [];
-      renderPresetSelect();
-    }
-
-    async function savePreset() {
-      const config = configFromUI();
-      const name = el('preset-name').value.trim();
-      if (!name) throw new Error('Bitte einen Preset-Namen eingeben.');
-      const response = await fetch('/api/presets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: state.selectedPresetId || undefined,
-          name,
-          ...config
-        })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Preset konnte nicht gespeichert werden.');
-      state.selectedPresetId = data.preset.id;
-      await loadPresets();
-      setStatus('Preset gespeichert.', 'ok');
-    }
-
-    async function deletePreset() {
-      if (!state.selectedPresetId) throw new Error('Kein Preset ausgewählt.');
-      const response = await fetch(`/api/presets/${encodeURIComponent(state.selectedPresetId)}`, { method: 'DELETE' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Preset konnte nicht gelöscht werden.');
-      state.selectedPresetId = '';
-      el('preset-name').value = '';
-      await loadPresets();
-      setStatus('Preset gelöscht.', 'ok');
-    }
-
-    async function processFile() {
-      const file = el('docx-file').files[0];
-      if (!file) throw new Error('Bitte eine DOCX-Datei auswählen.');
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('config', JSON.stringify(configFromUI()));
-      setStatus('PDF wird erstellt ...');
-      const response = await fetch('/api/process', { method: 'POST', body: formData });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'PDF konnte nicht erstellt werden.');
-      }
-      const blob = await response.blob();
-      const disposition = response.headers.get('Content-Disposition') || '';
-      const match = disposition.match(/filename="([^"]+)"/);
-      const filename = match ? match[1] : file.name.replace(/\.docx$/i, '.colored.pdf');
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setStatus('PDF bereit.', 'ok');
-    }
-
-    function run(action) {
-      Promise.resolve()
-        .then(action)
-        .catch((error) => setStatus(error.message || String(error), 'error'));
-    }
-
-    el('add-name').addEventListener('click', () => addNameRow());
-    el('add-fallback').addEventListener('click', () => addFallbackRow());
-    el('new-preset').addEventListener('click', () => {
-      state.selectedPresetId = '';
-      el('preset-select').value = '';
-      el('preset-name').value = '';
-      applyConfig(defaultConfig);
-      setStatus('Neues Preset.');
-    });
-    el('save-preset').addEventListener('click', () => run(savePreset));
-    el('delete-preset').addEventListener('click', () => run(deletePreset));
-    el('process').addEventListener('click', () => run(processFile));
-    el('preset-select').addEventListener('change', (event) => {
-      state.selectedPresetId = event.target.value;
-      const preset = state.presets.find((item) => item.id === state.selectedPresetId);
-      if (preset) {
-        el('preset-name').value = preset.name;
-        applyConfig(preset);
-      }
-    });
-
-    applyConfig(defaultConfig);
-    run(loadPresets);
-  </script>
-</body>
-</html>
-"""
 
 
 def parse_args() -> argparse.Namespace:
