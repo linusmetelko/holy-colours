@@ -43,21 +43,17 @@ colours.example.com -> 203.0.113.10
 
 ### VPS vorbereiten
 
-Kopiere das Repository auf den VPS und lege die persistente Preset-Datei an:
+Kopiere das Repository auf den VPS und lege die `.env` an:
 
 ```bash
 git clone <repo-url> holy-colours
 cd holy-colours
 cp .env.example .env
-mkdir -p data
-cp presets.example.json data/presets.json
-sudo chown -R 10001:10001 data
 ```
 
 Passe anschließend `.env` an:
 
 - `HOLY_COLOURS_DOMAIN`: deine Subdomain
-- `TRAEFIK_NETWORK`: Name des externen Docker-Netzwerks, in dem Traefik läuft
 - `TRAEFIK_ENTRYPOINT`: meist `websecure`
 - `TRAEFIK_CERTRESOLVER`: Name deines bestehenden Let's-Encrypt-Resolvers
 - `HOLY_COLOURS_BASIC_AUTH`: Basic-Auth-Zugangsdaten für Traefik
@@ -84,7 +80,9 @@ Starte die App:
 docker compose up -d --build
 ```
 
-Die App veröffentlicht keinen eigenen Host-Port. Traefik erreicht sie über das externe Docker-Netzwerk und schützt sie per Basic Auth.
+Die App veröffentlicht nur `127.0.0.1:8000` auf dem Host. Das passt zu Traefik im Host-Netzwerk: Traefik kann die App lokal erreichen, der Port ist aber nicht direkt auf der öffentlichen VPS-IP geöffnet. Traefik schützt den öffentlichen Zugriff per Basic Auth.
+
+Presets werden im Docker-Volume `holy-colours-data` gespeichert.
 
 Updates laufen über:
 
@@ -102,7 +100,7 @@ docker compose logs -f holy-colours
 
 ### Backup
 
-Die Produktions-Presets liegen auf dem VPS in `data/presets.json`. Sichere diese Datei regelmäßig, zum Beispiel zusammen mit den Hostinger-VPS-Backups.
+Die Produktions-Presets liegen im Docker-Volume `holy-colours-data` unter `/data/presets.json`. Sichere dieses Volume regelmäßig, zum Beispiel zusammen mit den Hostinger-VPS-Backups.
 
 ## Verwendung
 

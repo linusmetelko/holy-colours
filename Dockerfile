@@ -3,7 +3,8 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOLY_COLOURS_HOST=0.0.0.0 \
-    HOLY_COLOURS_PORT=8000
+    HOLY_COLOURS_PORT=8000 \
+    HOLY_COLOURS_PRESETS_PATH=/data/presets.json
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -16,6 +17,7 @@ RUN apt-get update \
 WORKDIR /app
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
+RUN mkdir /data && chown appuser:appuser /data
 
 COPY --chown=appuser:appuser web_app.py highlight_names.py colors.example.json ./
 COPY --chown=appuser:appuser static ./static

@@ -27,7 +27,7 @@ import highlight_names
 
 ROOT_DIR = Path(__file__).resolve().parent
 STATIC_DIR = ROOT_DIR / "static"
-PRESETS_PATH = ROOT_DIR / "presets.json"
+PRESETS_PATH = Path(os.environ.get("HOLY_COLOURS_PRESETS_PATH", ROOT_DIR / "presets.json"))
 COLORS_EXAMPLE_PATH = ROOT_DIR / "colors.example.json"
 DEFAULT_FALLBACK_COLORS = ["#F4CCCC", "#D9EAD3", "#CFE2F3", "#FFF2CC"]
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
