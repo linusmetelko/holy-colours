@@ -1,0 +1,15 @@
+.DS_Store
+.git
+.gitignore
+.env
+__pycache__/
+*.py[cod]
+
+# Lokale Produktionsdaten und Export-Artefakte
+*.docx
+*.pdf
+presets.json
+data/
+
+# Test- und Entwicklungsdateien werden nicht im Runtime-Image gebraucht
+tests/

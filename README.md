@@ -27,6 +27,83 @@ Optional können Host und Port gesetzt werden:
 python3 web_app.py --host 0.0.0.0 --port 8000
 ```
 
+## Docker-Deployment hinter Traefik
+
+Für einen VPS mit bestehendem Traefik wird ein eigenes Docker-Image gebaut. Das Image enthält Python und LibreOffice, damit der PDF-Export im Container funktioniert.
+
+### DNS vorbereiten
+
+Lege für die gewünschte Subdomain einen `A`-Record auf die IPv4-Adresse deines VPS an. Falls du IPv6 nutzt, ergänze zusätzlich einen `AAAA`-Record.
+
+Beispiel:
+
+```text
+colours.example.com -> 203.0.113.10
+```
+
+### VPS vorbereiten
+
+Kopiere das Repository auf den VPS und lege die persistente Preset-Datei an:
+
+```bash
+git clone <repo-url> holy-colours
+cd holy-colours
+cp .env.example .env
+mkdir -p data
+cp presets.example.json data/presets.json
+sudo chown -R 10001:10001 data
+```
+
+Passe anschließend `.env` an:
+
+- `HOLY_COLOURS_DOMAIN`: deine Subdomain
+- `TRAEFIK_NETWORK`: Name des externen Docker-Netzwerks, in dem Traefik läuft
+- `TRAEFIK_ENTRYPOINT`: meist `websecure`
+- `TRAEFIK_CERTRESOLVER`: Name deines bestehenden Let's-Encrypt-Resolvers
+- `HOLY_COLOURS_BASIC_AUTH`: Basic-Auth-Zugangsdaten für Traefik
+
+Den Basic-Auth-Hash kannst du zum Beispiel mit `htpasswd` erzeugen:
+
+```bash
+htpasswd -nbB admin 'dein-sicheres-passwort'
+```
+
+Wenn du den Hash in `.env` einträgst, müssen Dollarzeichen doppelt geschrieben werden. Aus `admin:$2y$05$...` wird also `admin:$$2y$$05$$...`.
+
+Falls `htpasswd` auf dem VPS fehlt, kannst du ihn über einen temporären Container erzeugen:
+
+```bash
+docker run --rm httpd:2.4-alpine htpasswd -nbB admin 'dein-sicheres-passwort'
+```
+
+### Starten und aktualisieren
+
+Starte die App:
+
+```bash
+docker compose up -d --build
+```
+
+Die App veröffentlicht keinen eigenen Host-Port. Traefik erreicht sie über das externe Docker-Netzwerk und schützt sie per Basic Auth.
+
+Updates laufen über:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Logs und Status:
+
+```bash
+docker compose ps
+docker compose logs -f holy-colours
+```
+
+### Backup
+
+Die Produktions-Presets liegen auf dem VPS in `data/presets.json`. Sichere diese Datei regelmäßig, zum Beispiel zusammen mit den Hostinger-VPS-Backups.
+
 ## Verwendung
 
 ```bash
@@ -47,3 +124,9 @@ Die JSON-Datei hat zwei Bereiche:
 - `fallback_colors`: Ersatzfarben für unbekannte Namen
 
 Farben müssen als Hexwerte im Format `#RRGGBB` angegeben werden.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests
+```

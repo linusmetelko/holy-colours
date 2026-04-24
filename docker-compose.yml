@@ -1,0 +1,29 @@
+services:
+  holy-colours:
+    build:
+      context: .
+    image: holy-colours:local
+    container_name: holy-colours
+    restart: unless-stopped
+    environment:
+      HOLY_COLOURS_HOST: 0.0.0.0
+      HOLY_COLOURS_PORT: 8000
+    volumes:
+      - ./data/presets.json:/app/presets.json
+    networks:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
+      - traefik.http.routers.holy-colours.rule=Host(`${HOLY_COLOURS_DOMAIN:?Set HOLY_COLOURS_DOMAIN}`)
+      - traefik.http.routers.holy-colours.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.holy-colours.tls=true
+      - traefik.http.routers.holy-colours.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.holy-colours.middlewares=holy-colours-auth@docker
+      - traefik.http.middlewares.holy-colours-auth.basicauth.users=${HOLY_COLOURS_BASIC_AUTH:?Set HOLY_COLOURS_BASIC_AUTH}
+      - traefik.http.services.holy-colours.loadbalancer.server.port=8000
+
+networks:
+  traefik:
+    name: ${TRAEFIK_NETWORK:-traefik}
+    external: true
