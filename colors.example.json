@@ -1,0 +1,7 @@
+{
+  "name_colors": {
+    "LEON": "#FFD966",
+    "ERZÄHLER": "#9FC5E8"
+  },
+  "fallback_colors": ["#F4CCCC", "#D9EAD3", "#CFE2F3", "#FFF2CC"]
+}
