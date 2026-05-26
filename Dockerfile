@@ -9,7 +9,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fontconfig \
+        fonts-crosextra-caladea \
+        fonts-crosextra-carlito \
         fonts-dejavu \
+        fonts-liberation2 \
+        fonts-noto-core \
         libreoffice-writer \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

@@ -114,6 +114,167 @@ class HighlightNamesTests(unittest.TestCase):
         self.assertEqual(["AN", "NA:"], highlighted_texts)
         self.assertEqual("ANNA: Hallo", paragraph_text(paragraph))
 
+    def test_preserves_direct_font_on_highlighted_name(self) -> None:
+        document_xml = build_document_xml(
+            [
+                (
+                    "<w:p><w:r>"
+                    '<w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/></w:rPr>'
+                    "<w:t>ANNA: Hallo</w:t>"
+                    "</w:r></w:p>"
+                )
+            ]
+        ).encode("utf-8")
+
+        updated_document, _, highlighted_count = hn.process_document_xml(
+            document_xml=document_xml,
+            name_colors={"ANNA": "FFD966"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        highlighted_run = root.find(f".//{qname(W_NS, 'r')}")
+        self.assertEqual("ANNA:", highlighted_run.find(qname(W_NS, "t")).text)
+        rfonts = highlighted_run.find(f"{qname(W_NS, 'rPr')}/{qname(W_NS, 'rFonts')}")
+        self.assertIsNotNone(rfonts)
+        self.assertEqual("Courier New", rfonts.get(qname(W_NS, "ascii")))
+        self.assertEqual("Courier New", rfonts.get(qname(W_NS, "hAnsi")))
+
+    def test_highlights_multiple_speakers_with_separate_colors(self) -> None:
+        updated_document, assigned_fallbacks, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                ["<w:p><w:r><w:t>ANNA: / BOB: Hallo zusammen</w:t></w:r></w:p>"]
+            ).encode("utf-8"),
+            name_colors={"ANNA": "FFD966", "BOB": "CFE2F3"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual({}, assigned_fallbacks)
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        paragraph = root.find(f".//{qname(W_NS, 'p')}")
+        runs = [
+            run
+            for run in paragraph.findall(qname(W_NS, "r"))
+            if run.find(qname(W_NS, "t")) is not None
+        ]
+
+        self.assertEqual(
+            ["ANNA:", " / ", "BOB:", " Hallo zusammen"],
+            [run.find(qname(W_NS, "t")).text for run in runs],
+        )
+        self.assertEqual("FFD966", get_run_fill(runs[0]))
+        self.assertIsNone(get_run_fill(runs[1]))
+        self.assertEqual("CFE2F3", get_run_fill(runs[2]))
+        self.assertIsNone(get_run_fill(runs[3]))
+        self.assertEqual("ANNA: / BOB: Hallo zusammen", paragraph_text(paragraph))
+
+    def test_highlights_multiple_speaker_labels_separated_by_space(self) -> None:
+        updated_document, _, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                ["<w:p><w:r><w:t>ANNA: BOB: Hallo zusammen</w:t></w:r></w:p>"]
+            ).encode("utf-8"),
+            name_colors={"ANNA": "FFD966", "BOB": "CFE2F3"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        paragraph = root.find(f".//{qname(W_NS, 'p')}")
+        runs = [
+            run
+            for run in paragraph.findall(qname(W_NS, "r"))
+            if run.find(qname(W_NS, "t")) is not None
+        ]
+
+        self.assertEqual(
+            ["ANNA:", " ", "BOB:", " Hallo zusammen"],
+            [run.find(qname(W_NS, "t")).text for run in runs],
+        )
+        self.assertEqual("FFD966", get_run_fill(runs[0]))
+        self.assertIsNone(get_run_fill(runs[1]))
+        self.assertEqual("CFE2F3", get_run_fill(runs[2]))
+        self.assertIsNone(get_run_fill(runs[3]))
+
+    def test_splits_combined_speaker_label_before_colon(self) -> None:
+        updated_document, assigned_fallbacks, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                ["<w:p><w:r><w:t>ANNA / BOB: Hallo zusammen</w:t></w:r></w:p>"]
+            ).encode("utf-8"),
+            name_colors={"ANNA": "FFD966", "BOB": "CFE2F3"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual({}, assigned_fallbacks)
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        paragraph = root.find(f".//{qname(W_NS, 'p')}")
+        runs = [
+            run
+            for run in paragraph.findall(qname(W_NS, "r"))
+            if run.find(qname(W_NS, "t")) is not None
+        ]
+
+        self.assertEqual(
+            ["ANNA", " / ", "BOB:", " Hallo zusammen"],
+            [run.find(qname(W_NS, "t")).text for run in runs],
+        )
+        self.assertEqual("FFD966", get_run_fill(runs[0]))
+        self.assertIsNone(get_run_fill(runs[1]))
+        self.assertEqual("CFE2F3", get_run_fill(runs[2]))
+        self.assertIsNone(get_run_fill(runs[3]))
+        self.assertEqual("ANNA / BOB: Hallo zusammen", paragraph_text(paragraph))
+
+    def test_does_not_highlight_retake_speaker_names(self) -> None:
+        updated_document, assigned_fallbacks, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                [
+                    "<w:p><w:r><w:t>BEN-RETAKE: Noch einmal</w:t></w:r></w:p>",
+                    "<w:p><w:r><w:t>BEN-Retake: Noch einmal</w:t></w:r></w:p>",
+                ]
+            ).encode("utf-8"),
+            name_colors={"BEN-RETAKE": "FFD966", "BEN": "CFE2F3"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual({}, assigned_fallbacks)
+        self.assertEqual(0, highlighted_count)
+        root = ET.fromstring(updated_document)
+        runs = root.findall(f".//{qname(W_NS, 'r')}")
+
+        self.assertEqual(
+            ["BEN-RETAKE: Noch einmal", "BEN-Retake: Noch einmal"],
+            [run.find(qname(W_NS, "t")).text for run in runs],
+        )
+        self.assertEqual([None, None], [get_run_fill(run) for run in runs])
+
+    def test_retakes_do_not_receive_fallback_colors_in_multi_speaker_lines(self) -> None:
+        updated_document, assigned_fallbacks, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                ["<w:p><w:r><w:t>ANNA: / BEN-RETAKE: Noch einmal</w:t></w:r></w:p>"]
+            ).encode("utf-8"),
+            name_colors={"ANNA": "FFD966"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual({}, assigned_fallbacks)
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        paragraph = root.find(f".//{qname(W_NS, 'p')}")
+        runs = [
+            run
+            for run in paragraph.findall(qname(W_NS, "r"))
+            if run.find(qname(W_NS, "t")) is not None
+        ]
+
+        self.assertEqual(
+            ["ANNA:", " / BEN-RETAKE: Noch einmal"],
+            [run.find(qname(W_NS, "t")).text for run in runs],
+        )
+        self.assertEqual("FFD966", get_run_fill(runs[0]))
+        self.assertIsNone(get_run_fill(runs[1]))
+
     def test_does_not_highlight_name_in_middle_of_paragraph(self) -> None:
         updated_document, _, highlighted_count = hn.process_document_xml(
             document_xml=build_document_xml(
@@ -130,6 +291,28 @@ class HighlightNamesTests(unittest.TestCase):
         self.assertEqual(1, len(runs))
         self.assertEqual("Hallo ANNA: Nein", runs[0].find(qname(W_NS, "t")).text)
         self.assertIsNone(get_run_fill(runs[0]))
+
+    def test_does_not_treat_dialog_time_as_second_speaker(self) -> None:
+        updated_document, assigned_fallbacks, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                ["<w:p><w:r><w:t>ANNA: UM 12:00 geht es los</w:t></w:r></w:p>"]
+            ).encode("utf-8"),
+            name_colors={"ANNA": "FFD966"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual({}, assigned_fallbacks)
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        paragraph = root.find(f".//{qname(W_NS, 'p')}")
+        runs = paragraph.findall(qname(W_NS, "r"))
+
+        self.assertEqual(
+            ["ANNA:", " UM 12:00 geht es los"],
+            [run.find(qname(W_NS, "t")).text for run in runs],
+        )
+        self.assertEqual("FFD966", get_run_fill(runs[0]))
+        self.assertIsNone(get_run_fill(runs[1]))
 
 
 def get_run_fill(run: ET.Element) -> str | None:

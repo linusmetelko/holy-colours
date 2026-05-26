@@ -12,6 +12,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -36,9 +37,12 @@ PRESETS_PATH = Path(os.environ.get("HOLY_COLOURS_PRESETS_PATH", ROOT_DIR / "pres
 COLORS_EXAMPLE_PATH = ROOT_DIR / "colors.example.json"
 DEFAULT_FALLBACK_COLORS = ["#F4CCCC", "#D9EAD3", "#CFE2F3", "#FFF2CC"]
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,40}$")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 SESSION_COOKIE_NAME = "holy_colours_session"
 SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+PASSWORD_MIN_LENGTH = 8
+PBKDF2_ITERATIONS = 240_000
 
 MIME_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -69,35 +73,25 @@ def now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
-def auth_credentials() -> tuple[str, str] | None:
-    username = os.environ.get("HOLY_COLOURS_AUTH_USERNAME", "")
-    password = os.environ.get("HOLY_COLOURS_AUTH_PASSWORD", "")
-    if not username and not password:
-        return None
-    if not username or not password:
-        raise WebAppError(
-            "HOLY_COLOURS_AUTH_USERNAME und HOLY_COLOURS_AUTH_PASSWORD müssen beide gesetzt sein.",
-            HTTPStatus.INTERNAL_SERVER_ERROR,
-        )
-    return username, password
+def session_secret_bytes(secret_value: str | bytes) -> bytes:
+    if isinstance(secret_value, bytes):
+        return secret_value
+    return secret_value.encode("utf-8")
 
 
-def session_secret(credentials: tuple[str, str]) -> bytes:
-    raw_secret = os.environ.get("HOLY_COLOURS_SESSION_SECRET", "")
-    if raw_secret:
-        return raw_secret.encode("utf-8")
-    return f"{credentials[0]}:{credentials[1]}".encode("utf-8")
-
-
-def sign_session(username: str, issued_at: int, secret: bytes) -> str:
-    payload = f"{username}:{issued_at}"
-    signature = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+def sign_session(username_key: str, issued_at: int, secret_value: str | bytes) -> str:
+    payload = f"{username_key}:{issued_at}"
+    signature = hmac.new(
+        session_secret_bytes(secret_value),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
     token = f"{payload}:{signature}".encode("utf-8")
     return base64.urlsafe_b64encode(token).decode("ascii")
 
 
-def create_session_cookie(username: str, credentials: tuple[str, str]) -> str:
-    token = sign_session(username, int(time.time()), session_secret(credentials))
+def create_session_cookie(username_key: str, secret_value: str | bytes) -> str:
+    token = sign_session(username_key, int(time.time()), secret_value)
     return (
         f"{SESSION_COOKIE_NAME}={token}; Max-Age={SESSION_MAX_AGE_SECONDS}; "
         "Path=/; HttpOnly; SameSite=Lax"
@@ -106,6 +100,52 @@ def create_session_cookie(username: str, credentials: tuple[str, str]) -> str:
 
 def clear_session_cookie() -> str:
     return f"{SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
+
+
+def normalize_username(value: object) -> str:
+    username = str(value or "").strip()
+    if not USERNAME_RE.fullmatch(username):
+        raise WebAppError(
+            "Benutzername muss 2 bis 40 Zeichen lang sein und darf nur Buchstaben, Zahlen, Punkt, Unterstrich oder Bindestrich enthalten."
+        )
+    return username
+
+
+def username_key(username: str) -> str:
+    return username.casefold()
+
+
+def validate_password(value: object) -> str:
+    password = str(value or "")
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise WebAppError(f"Passwort muss mindestens {PASSWORD_MIN_LENGTH} Zeichen lang sein.")
+    return password
+
+
+def hash_password(password: str, salt_hex: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        bytes.fromhex(salt_hex),
+        PBKDF2_ITERATIONS,
+    ).hex()
+
+
+def build_password_record(password: str) -> tuple[str, str]:
+    salt_hex = secrets.token_hex(16)
+    return salt_hex, hash_password(password, salt_hex)
+
+
+def verify_password(password: str, user: dict[str, object]) -> bool:
+    salt_hex = str(user.get("password_salt") or "")
+    expected_hash = str(user.get("password_hash") or "")
+    if not salt_hex or not expected_hash:
+        return False
+    try:
+        actual_hash = hash_password(password, salt_hex)
+    except ValueError:
+        return False
+    return hmac.compare_digest(actual_hash, expected_hash)
 
 
 def parse_cookie_header(cookie_header: str | None) -> dict[str, str]:
@@ -119,30 +159,325 @@ def parse_cookie_header(cookie_header: str | None) -> dict[str, str]:
     return cookies
 
 
-def is_valid_session(cookie_header: str | None, credentials: tuple[str, str]) -> bool:
+def decode_session_cookie(cookie_header: str | None) -> tuple[str, int, str] | None:
     token = parse_cookie_header(cookie_header).get(SESSION_COOKIE_NAME)
     if not token:
-        return False
+        return None
     try:
         decoded = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError):
-        return False
+        return None
 
     try:
-        username, raw_issued_at, signature = decoded.split(":", 2)
+        cookie_username_key, raw_issued_at, signature = decoded.split(":", 2)
     except ValueError:
-        return False
-    if username != credentials[0]:
-        return False
+        return None
     try:
         issued_at = int(raw_issued_at)
     except ValueError:
+        return None
+    return cookie_username_key, issued_at, signature
+
+
+def is_valid_session(
+    cookie_header: str | None,
+    expected_username_key: str,
+    secret_value: str | bytes,
+) -> bool:
+    decoded = decode_session_cookie(cookie_header)
+    if decoded is None:
+        return False
+
+    cookie_username_key, issued_at, signature = decoded
+    if cookie_username_key != expected_username_key:
         return False
     if issued_at < int(time.time()) - SESSION_MAX_AGE_SECONDS:
         return False
 
-    expected_token = sign_session(username, issued_at, session_secret(credentials))
+    expected_token = sign_session(cookie_username_key, issued_at, secret_value)
+    token = parse_cookie_header(cookie_header).get(SESSION_COOKIE_NAME, "")
     return hmac.compare_digest(token, expected_token)
+
+
+def validate_preset(raw_preset: object, context: str) -> dict[str, object] | None:
+    if not isinstance(raw_preset, dict):
+        return None
+
+    preset_id = str(raw_preset.get("id") or "").strip()
+    name = str(raw_preset.get("name") or "").strip()
+    if not preset_id or not name:
+        return None
+    try:
+        name_colors = validate_name_colors(raw_preset.get("name_colors", {}))
+        fallback_colors = validate_fallback_colors(raw_preset.get("fallback_colors", []))
+    except WebAppError as exc:
+        raise WebAppError(f"Ungültiges Preset {context}: {exc.message}") from exc
+
+    return {
+        "id": preset_id,
+        "name": name,
+        "name_colors": name_colors,
+        "fallback_colors": fallback_colors,
+        "updated_at": str(raw_preset.get("updated_at") or ""),
+    }
+
+
+def validate_preset_list(value: object, context: str) -> list[dict[str, object]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise WebAppError(f"{context} muss eine Preset-Liste enthalten.")
+
+    presets = []
+    for index, raw_preset in enumerate(value):
+        preset = validate_preset(raw_preset, f"{context} an Position {index}")
+        if preset is not None:
+            presets.append(preset)
+    return sorted(presets, key=lambda item: str(item["name"]).casefold())
+
+
+def normalize_import_preset(raw_preset: object, context: str) -> dict[str, object] | None:
+    if not isinstance(raw_preset, dict):
+        return None
+
+    name = str(raw_preset.get("name") or "").strip()
+    if not name:
+        return None
+    try:
+        name_colors = validate_name_colors(raw_preset.get("name_colors", {}))
+        fallback_colors = validate_fallback_colors(raw_preset.get("fallback_colors", []))
+    except WebAppError as exc:
+        raise WebAppError(f"Ungültiges Import-Preset {context}: {exc.message}") from exc
+
+    return {
+        "id": str(raw_preset.get("id") or "").strip() or uuid.uuid4().hex,
+        "name": name,
+        "name_colors": name_colors,
+        "fallback_colors": fallback_colors,
+        "updated_at": str(raw_preset.get("updated_at") or "") or now_iso(),
+    }
+
+
+def normalize_import_preset_list(value: object, context: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise WebAppError(f"{context} muss eine Preset-Liste enthalten.")
+
+    presets = []
+    for index, raw_preset in enumerate(value):
+        preset = normalize_import_preset(raw_preset, f"{context} an Position {index}")
+        if preset is not None:
+            presets.append(preset)
+    return presets
+
+
+def extract_import_presets(
+    payload: object,
+    current_username_key: str,
+) -> list[dict[str, object]]:
+    if isinstance(payload, list):
+        return normalize_import_preset_list(payload, "Import")
+    if not isinstance(payload, dict):
+        raise WebAppError("Importdatei muss ein JSON-Objekt oder eine Preset-Liste sein.")
+
+    if "presets" in payload:
+        return normalize_import_preset_list(payload.get("presets"), "Import")
+
+    if "users" in payload:
+        users = payload.get("users")
+        if not isinstance(users, list):
+            raise WebAppError("Importdatei enthält keine gültige Benutzer-Liste.")
+
+        matching_presets: list[dict[str, object]] = []
+        all_presets: list[dict[str, object]] = []
+        for index, raw_user in enumerate(users):
+            if not isinstance(raw_user, dict):
+                continue
+
+            user_presets = normalize_import_preset_list(
+                raw_user.get("presets", []),
+                f"Benutzer an Position {index}",
+            )
+            all_presets.extend(user_presets)
+
+            imported_key = str(raw_user.get("username_key") or "").strip()
+            if not imported_key:
+                imported_username = str(raw_user.get("username") or "").strip()
+                imported_key = username_key(imported_username) if imported_username else ""
+            if imported_key == current_username_key:
+                matching_presets.extend(user_presets)
+
+        return matching_presets or all_presets
+
+    preset = normalize_import_preset(payload, "als Einzelpreset")
+    if preset is not None:
+        return [preset]
+
+    raise WebAppError("Importdatei enthält keine Presets.")
+
+
+def empty_data_store() -> dict[str, object]:
+    return {
+        "version": 2,
+        "session_secret": secrets.token_hex(32),
+        "users": [],
+        "legacy_presets": [],
+    }
+
+
+def validate_user(raw_user: object, context: str) -> dict[str, object] | None:
+    if not isinstance(raw_user, dict):
+        return None
+
+    username = str(raw_user.get("username") or "").strip()
+    if not username:
+        return None
+    try:
+        username = normalize_username(username)
+    except WebAppError as exc:
+        raise WebAppError(f"Ungültiger Benutzer {context}: {exc.message}") from exc
+
+    user_id = str(raw_user.get("id") or "").strip() or uuid.uuid4().hex
+    return {
+        "id": user_id,
+        "username": username,
+        "username_key": str(raw_user.get("username_key") or username_key(username)),
+        "password_salt": str(raw_user.get("password_salt") or ""),
+        "password_hash": str(raw_user.get("password_hash") or ""),
+        "created_at": str(raw_user.get("created_at") or ""),
+        "presets": validate_preset_list(raw_user.get("presets", []), f"Benutzer {username}"),
+    }
+
+
+def read_data_store(path: Path = PRESETS_PATH) -> dict[str, object]:
+    if not path.exists():
+        return empty_data_store()
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WebAppError(f"Die Preset-Datei enthält ungültiges JSON: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise WebAppError("Die Preset-Datei muss ein JSON-Objekt enthalten.")
+
+    session_secret = str(raw.get("session_secret") or "").strip()
+    if not session_secret:
+        session_secret = secrets.token_hex(32)
+
+    users_raw = raw.get("users", [])
+    if not isinstance(users_raw, list):
+        raise WebAppError("Die Preset-Datei muss eine Benutzer-Liste enthalten.")
+
+    users = []
+    for index, raw_user in enumerate(users_raw):
+        user = validate_user(raw_user, f"an Position {index}")
+        if user is not None:
+            users.append(user)
+
+    return {
+        "version": 2,
+        "session_secret": session_secret,
+        "users": users,
+        "legacy_presets": validate_preset_list(raw.get("presets", []), "presets"),
+    }
+
+
+def write_data_store(store: dict[str, object], path: Path = PRESETS_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(
+        {
+            "version": 2,
+            "session_secret": store["session_secret"],
+            "users": store["users"],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as tmp_file:
+        tmp_file.write(data)
+        tmp_path = Path(tmp_file.name)
+    tmp_path.replace(path)
+
+
+def find_user(store: dict[str, object], key: str) -> dict[str, object] | None:
+    for user in store["users"]:
+        if isinstance(user, dict) and user.get("username_key") == key:
+            return user
+    return None
+
+
+def public_user(user: dict[str, object]) -> dict[str, str]:
+    return {
+        "id": str(user["id"]),
+        "username": str(user["username"]),
+    }
+
+
+def register_user(payload: object, path: Path = PRESETS_PATH) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise WebAppError("Registrierungsdaten müssen als Objekt gesendet werden.")
+
+    username = normalize_username(payload.get("username"))
+    password = validate_password(payload.get("password"))
+    store = read_data_store(path)
+    key = username_key(username)
+    if find_user(store, key) is not None:
+        raise WebAppError("Benutzername ist bereits vergeben.", HTTPStatus.CONFLICT)
+
+    salt_hex, password_hash = build_password_record(password)
+    users = list(store["users"])
+    user_presets = list(store["legacy_presets"]) if not users else []
+    user = {
+        "id": uuid.uuid4().hex,
+        "username": username,
+        "username_key": key,
+        "password_salt": salt_hex,
+        "password_hash": password_hash,
+        "created_at": now_iso(),
+        "presets": user_presets,
+    }
+    users.append(user)
+    users.sort(key=lambda item: str(item["username"]).casefold())
+    store["users"] = users
+    store["legacy_presets"] = []
+    write_data_store(store, path)
+    return user
+
+
+def authenticate_user(
+    username_value: object,
+    password_value: object,
+    path: Path = PRESETS_PATH,
+) -> dict[str, object]:
+    username = normalize_username(username_value)
+    password = str(password_value or "")
+    store = read_data_store(path)
+    user = find_user(store, username_key(username))
+    if user is None or not verify_password(password, user):
+        raise WebAppError("Benutzername oder Passwort ist falsch.", HTTPStatus.UNAUTHORIZED)
+    return user
+
+
+def user_from_session(
+    cookie_header: str | None,
+    path: Path = PRESETS_PATH,
+) -> dict[str, object] | None:
+    decoded = decode_session_cookie(cookie_header)
+    if decoded is None:
+        return None
+
+    cookie_username_key, issued_at, _signature = decoded
+    store = read_data_store(path)
+    user = find_user(store, cookie_username_key)
+    if user is None:
+        return None
+    if not is_valid_session(cookie_header, cookie_username_key, str(store["session_secret"])):
+        return None
+    if issued_at < int(time.time()) - SESSION_MAX_AGE_SECONDS:
+        return None
+    return user
 
 
 def normalize_color(value: object, field: str) -> str:
@@ -207,55 +542,19 @@ def load_default_config() -> dict[str, object]:
     return {"name_colors": {}, "fallback_colors": DEFAULT_FALLBACK_COLORS}
 
 
-def read_presets(path: Path = PRESETS_PATH) -> list[dict[str, object]]:
-    if not path.exists():
-        return []
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise WebAppError(f"Die Preset-Datei enthält ungültiges JSON: {exc}") from exc
-
-    presets = raw.get("presets") if isinstance(raw, dict) else None
-    if not isinstance(presets, list):
-        raise WebAppError("Die Preset-Datei muss eine Preset-Liste enthalten.")
-
-    validated = []
-    for index, preset in enumerate(presets):
-        if not isinstance(preset, dict):
-            continue
-        preset_id = str(preset.get("id") or "").strip()
-        name = str(preset.get("name") or "").strip()
-        if not preset_id or not name:
-            continue
-        try:
-            name_colors = validate_name_colors(preset.get("name_colors", {}))
-            fallback_colors = validate_fallback_colors(preset.get("fallback_colors", []))
-        except WebAppError as exc:
-            raise WebAppError(f"Ungültiges Preset an Position {index}: {exc.message}") from exc
-        validated.append(
-            {
-                "id": preset_id,
-                "name": name,
-                "name_colors": name_colors,
-                "fallback_colors": fallback_colors,
-                "updated_at": str(preset.get("updated_at") or ""),
-            }
-        )
-    return validated
+def read_presets(username_key_value: str, path: Path = PRESETS_PATH) -> list[dict[str, object]]:
+    store = read_data_store(path)
+    user = find_user(store, username_key_value)
+    if user is None:
+        raise WebAppError("Benutzer nicht gefunden.", HTTPStatus.NOT_FOUND)
+    return list(user["presets"])
 
 
-def write_presets(presets: list[dict[str, object]], path: Path = PRESETS_PATH) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps({"presets": presets}, ensure_ascii=False, indent=2)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False
-    ) as tmp_file:
-        tmp_file.write(data)
-        tmp_path = Path(tmp_file.name)
-    tmp_path.replace(path)
-
-
-def save_preset(payload: object, path: Path = PRESETS_PATH) -> dict[str, object]:
+def save_preset(
+    payload: object,
+    username_key_value: str,
+    path: Path = PRESETS_PATH,
+) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise WebAppError("Das Preset muss als Objekt gesendet werden.")
 
@@ -272,7 +571,12 @@ def save_preset(payload: object, path: Path = PRESETS_PATH) -> dict[str, object]
         "updated_at": now_iso(),
     }
 
-    presets = read_presets(path)
+    store = read_data_store(path)
+    user = find_user(store, username_key_value)
+    if user is None:
+        raise WebAppError("Benutzer nicht gefunden.", HTTPStatus.NOT_FOUND)
+
+    presets = list(user["presets"])
     replaced = False
     for index, existing in enumerate(presets):
         if existing["id"] == preset_id:
@@ -283,19 +587,95 @@ def save_preset(payload: object, path: Path = PRESETS_PATH) -> dict[str, object]
         presets.append(preset)
 
     presets.sort(key=lambda item: str(item["name"]).casefold())
-    write_presets(presets, path)
+    user["presets"] = presets
+    write_data_store(store, path)
     return preset
 
 
-def delete_preset(preset_id: str, path: Path = PRESETS_PATH) -> None:
+def delete_preset(
+    preset_id: str,
+    username_key_value: str,
+    path: Path = PRESETS_PATH,
+) -> None:
     preset_id = preset_id.strip()
     if not preset_id:
         raise WebAppError("Eine Preset-ID ist erforderlich.")
-    presets = read_presets(path)
+
+    store = read_data_store(path)
+    user = find_user(store, username_key_value)
+    if user is None:
+        raise WebAppError("Benutzer nicht gefunden.", HTTPStatus.NOT_FOUND)
+
+    presets = list(user["presets"])
     remaining = [preset for preset in presets if preset["id"] != preset_id]
     if len(remaining) == len(presets):
         raise WebAppError("Preset nicht gefunden.", HTTPStatus.NOT_FOUND)
-    write_presets(remaining, path)
+    user["presets"] = remaining
+    write_data_store(store, path)
+
+
+def import_presets(
+    payload: object,
+    username_key_value: str,
+    path: Path = PRESETS_PATH,
+) -> dict[str, object]:
+    imported_presets = extract_import_presets(payload, username_key_value)
+    if not imported_presets:
+        raise WebAppError("Importdatei enthält keine Presets.")
+
+    store = read_data_store(path)
+    user = find_user(store, username_key_value)
+    if user is None:
+        raise WebAppError("Benutzer nicht gefunden.", HTTPStatus.NOT_FOUND)
+
+    presets = list(user["presets"])
+    existing_by_id = {
+        str(preset["id"]): index
+        for index, preset in enumerate(presets)
+    }
+    created_count = 0
+    updated_count = 0
+
+    for preset in imported_presets:
+        preset_id = str(preset["id"])
+        if preset_id in existing_by_id:
+            presets[existing_by_id[preset_id]] = preset
+            updated_count += 1
+            continue
+
+        existing_by_id[preset_id] = len(presets)
+        presets.append(preset)
+        created_count += 1
+
+    presets.sort(key=lambda item: str(item["name"]).casefold())
+    user["presets"] = presets
+    write_data_store(store, path)
+    return {
+        "imported": len(imported_presets),
+        "created": created_count,
+        "updated": updated_count,
+        "presets": presets,
+    }
+
+
+def export_presets(
+    username_key_value: str,
+    username: str,
+    path: Path = PRESETS_PATH,
+) -> dict[str, object]:
+    return {
+        "format": "holy-colours-presets",
+        "version": 1,
+        "exported_at": now_iso(),
+        "username": username,
+        "presets": read_presets(username_key_value, path),
+    }
+
+
+def preset_export_filename(username: str) -> str:
+    safe_username = re.sub(r"[^A-Za-z0-9_.-]+", "_", username).strip("._")
+    safe_username = safe_username or "user"
+    return f"holy-colours-presets-{safe_username}.json"
 
 
 def find_soffice() -> str | None:
@@ -322,8 +702,12 @@ def convert_docx_to_pdf(
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
+    profile_dir = output_dir / "libreoffice-profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
     command = [
         converter,
+        f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
         "--headless",
         "--convert-to",
         "pdf",
@@ -488,10 +872,27 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
             if path.startswith("/static/"):
                 self.serve_static(path)
                 return
-            if not self.require_auth():
+            current_user = self.require_auth()
+            if current_user is None:
                 return
             if path == "/api/presets":
-                self.respond_json({"presets": read_presets()})
+                self.respond_json({"presets": read_presets(str(current_user["username_key"]))})
+                return
+            if path == "/api/presets/export":
+                username = str(current_user["username"])
+                payload = export_presets(
+                    str(current_user["username_key"]),
+                    username,
+                )
+                body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+                filename = preset_export_filename(username)
+                self.respond_bytes(
+                    body,
+                    "application/json; charset=utf-8",
+                    extra_headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
+                )
                 return
             self.respond_error("Nicht gefunden.", HTTPStatus.NOT_FOUND)
         except WebAppError as exc:
@@ -503,14 +904,22 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
             if path == "/api/login":
                 self.login()
                 return
+            if path == "/api/register":
+                self.register()
+                return
             if path == "/api/logout":
                 self.logout()
                 return
-            if not self.require_auth():
+            current_user = self.require_auth()
+            if current_user is None:
                 return
             if path == "/api/presets":
-                preset = save_preset(parse_json_body(self))
+                preset = save_preset(parse_json_body(self), str(current_user["username_key"]))
                 self.respond_json({"preset": preset})
+                return
+            if path == "/api/presets/import":
+                result = import_presets(parse_json_body(self), str(current_user["username_key"]))
+                self.respond_json(result)
                 return
             if path == "/api/process":
                 fields = parse_multipart(self)
@@ -540,12 +949,16 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         try:
-            if not self.require_auth():
+            current_user = self.require_auth()
+            if current_user is None:
                 return
             prefix = "/api/presets/"
             path = self.path.split("?", 1)[0]
             if path.startswith(prefix):
-                delete_preset(unquote(path[len(prefix) :]))
+                delete_preset(
+                    unquote(path[len(prefix) :]),
+                    str(current_user["username_key"]),
+                )
                 self.respond_json({"ok": True})
                 return
             self.respond_error("Nicht gefunden.", HTTPStatus.NOT_FOUND)
@@ -571,35 +984,41 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {format % args}")
 
     def session_status(self) -> dict[str, object]:
-        credentials = auth_credentials()
-        if credentials is None:
-            return {"auth_enabled": False, "authenticated": True}
-        return {
-            "auth_enabled": True,
-            "authenticated": is_valid_session(self.headers.get("Cookie"), credentials),
-        }
+        current_user = self.current_user()
+        if current_user is None:
+            return {"authenticated": False}
+        return {"authenticated": True, "user": public_user(current_user)}
 
     def login(self) -> None:
-        credentials = auth_credentials()
-        if credentials is None:
-            self.respond_json({"ok": True, "authenticated": True})
-            return
-
         payload = parse_json_body(self)
         if not isinstance(payload, dict):
             raise WebAppError("Login-Daten müssen als Objekt gesendet werden.")
 
-        username = str(payload.get("username") or "")
-        password = str(payload.get("password") or "")
-        if not hmac.compare_digest(username, credentials[0]) or not hmac.compare_digest(
-            password,
-            credentials[1],
-        ):
-            raise WebAppError("Benutzername oder Passwort ist falsch.", HTTPStatus.UNAUTHORIZED)
+        user = authenticate_user(payload.get("username"), payload.get("password"))
+        store = read_data_store()
 
         self.respond_json(
-            {"ok": True, "authenticated": True},
-            extra_headers={"Set-Cookie": create_session_cookie(username, credentials)},
+            {"ok": True, "authenticated": True, "user": public_user(user)},
+            extra_headers={
+                "Set-Cookie": create_session_cookie(
+                    str(user["username_key"]),
+                    str(store["session_secret"]),
+                )
+            },
+        )
+
+    def register(self) -> None:
+        user = register_user(parse_json_body(self))
+        store = read_data_store()
+        self.respond_json(
+            {"ok": True, "authenticated": True, "user": public_user(user)},
+            HTTPStatus.CREATED,
+            extra_headers={
+                "Set-Cookie": create_session_cookie(
+                    str(user["username_key"]),
+                    str(store["session_secret"]),
+                )
+            },
         )
 
     def logout(self) -> None:
@@ -608,12 +1027,17 @@ class HolyColoursHandler(BaseHTTPRequestHandler):
             extra_headers={"Set-Cookie": clear_session_cookie()},
         )
 
-    def require_auth(self) -> bool:
-        credentials = auth_credentials()
-        if credentials is None or is_valid_session(self.headers.get("Cookie"), credentials):
-            return True
+    def current_user(self) -> dict[str, object] | None:
+        if not hasattr(self, "_current_user"):
+            self._current_user = user_from_session(self.headers.get("Cookie"))
+        return self._current_user
+
+    def require_auth(self) -> dict[str, object] | None:
+        current_user = self.current_user()
+        if current_user is not None:
+            return current_user
         self.respond_auth_required()
-        return False
+        return None
 
     def respond_json(
         self,

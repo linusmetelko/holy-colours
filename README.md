@@ -5,9 +5,11 @@ Es ändert nur die Formatierung des `NAME:`-Präfix und schreibt immer eine neue
 
 ## Web-App
 
-Die Web-App stellt dieselbe Highlight-Logik im Heimnetz bereit. Sie speichert Produktions-Presets zentral in der lokalen Datei `presets.json`, nimmt eine `.docx`-Datei entgegen und exportiert eine eingefärbte PDF-Datei.
+Die Web-App stellt dieselbe Highlight-Logik im Heimnetz bereit. Benutzer können eigene Accounts erstellen; Produktions-Presets werden pro Benutzer in der lokalen Datei `presets.json` gespeichert. Die App nimmt eine `.docx`-Datei entgegen und exportiert eine eingefärbte PDF-Datei.
 
-`presets.json` ist bewusst nicht im Git-Repository enthalten, damit Produktionsdaten lokal bleiben. Für eine neue Installation kann `presets.example.json` als leere Vorlage verwendet werden.
+`presets.json` ist bewusst nicht im Git-Repository enthalten, damit Produktionsdaten lokal bleiben. Für eine neue Installation kann `presets.example.json` als leere Vorlage verwendet werden. Falls noch eine alte Datei mit gemeinsamer `presets`-Liste existiert, übernimmt der erste neu erstellte Benutzer diese Presets automatisch.
+
+Preset-Dateien können nach dem Login über `Exportieren` geteilt oder gesichert und über `Importieren` wieder in den aktuellen Benutzer importiert werden. Unterstützt werden alte Backups mit `{"presets":[...]}` sowie neue Benutzer-Backups.
 
 Für den PDF-Export muss LibreOffice auf dem Server installiert sein, damit `soffice` verfügbar ist.
 
@@ -56,8 +58,6 @@ Passe anschließend `.env` an:
 - `HOLY_COLOURS_DOMAIN`: deine Subdomain
 - `TRAEFIK_ENTRYPOINT`: meist `websecure`
 - `TRAEFIK_CERTRESOLVER`: Name deines bestehenden Let's-Encrypt-Resolvers
-- `HOLY_COLOURS_AUTH_USERNAME`: Benutzername für die App
-- `HOLY_COLOURS_AUTH_PASSWORD`: starkes Passwort für die App
 
 ### Starten und aktualisieren
 
@@ -69,7 +69,7 @@ docker compose up -d --build
 
 Die App veröffentlicht nur `127.0.0.1:8000` auf dem Host. Das passt zu Traefik im Host-Netzwerk: Traefik kann die App lokal erreichen, der Port ist aber nicht direkt auf der öffentlichen VPS-IP geöffnet. Traefik übernimmt HTTPS, die App schützt den Zugriff per eigenem Login-Screen.
 
-Presets werden im Docker-Volume `holy-colours-data` gespeichert.
+Benutzer und Presets werden im Docker-Volume `holy-colours-data` gespeichert. Den ersten Benutzer legst du direkt auf der Login-Seite über `Account erstellen` an.
 
 Updates laufen über:
 

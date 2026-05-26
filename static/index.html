@@ -16,7 +16,7 @@
         <div class="logo-icon">🎨</div>
         <div>
           <h1 id="login-title">Holy Colours</h1>
-          <p class="subtitle">Anmelden, um DOCX-Dateien zu färben.</p>
+          <p id="login-subtitle" class="subtitle">Anmelden, um DOCX-Dateien zu färben.</p>
         </div>
       </div>
 
@@ -26,8 +26,17 @@
       <label for="login-password" style="margin-top:14px">Passwort</label>
       <input id="login-password" type="password" autocomplete="current-password" required>
 
+      <div id="register-confirm-row" class="hidden">
+        <label for="register-password-confirm" style="margin-top:14px">Passwort wiederholen</label>
+        <input id="register-password-confirm" type="password" autocomplete="new-password">
+      </div>
+
       <button id="login-submit" type="submit" class="btn-primary login-submit">
         <span id="login-label">Anmelden</span>
+      </button>
+
+      <button id="auth-mode-toggle" type="button" class="auth-mode-toggle">
+        Account erstellen
       </button>
     </form>
   </section>
@@ -42,7 +51,10 @@
             <p class="subtitle">DOCX hochladen · Sprecherfarben wählen · PDF exportieren</p>
           </div>
         </div>
-        <button id="logout" type="button">Abmelden</button>
+        <div class="user-actions">
+          <span id="current-user" class="user-pill"></span>
+          <button id="logout" type="button">Abmelden</button>
+        </div>
       </div>
 
       <div class="steps">
@@ -75,8 +87,11 @@
           <div class="btn-row">
             <button id="new-preset" type="button">✦ Neu</button>
             <button id="save-preset" type="button">💾 Speichern</button>
+            <button id="export-presets" type="button">⬇ Exportieren</button>
+            <button id="import-presets" type="button">⬆ Importieren</button>
             <button id="delete-preset" type="button" class="btn-danger">🗑 Löschen</button>
           </div>
+          <input id="import-presets-file" class="hidden" type="file" accept=".json,application/json">
         </div>
 
         <!-- Export card -->

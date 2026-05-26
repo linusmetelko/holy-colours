@@ -7,6 +7,8 @@ const state = {
   nameColors: { ...(defaultConfig.name_colors || {}) },
   fallbackColors: [...(defaultConfig.fallback_colors || ['#F4CCCC'])],
   authenticated: false,
+  authMode: 'login',
+  currentUser: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -24,16 +26,37 @@ function setStatus(message, kind = '') {
 }
 
 /* ---- Auth ---- */
+function setAuthMode(mode) {
+  state.authMode = mode;
+  const isRegister = mode === 'register';
+  el('login-title').textContent = isRegister ? 'Account erstellen' : 'Holy Colours';
+  el('login-subtitle').textContent = isRegister
+    ? 'Neuen Benutzer anlegen und eigene Presets speichern.'
+    : 'Anmelden, um DOCX-Dateien zu färben.';
+  el('register-confirm-row').classList.toggle('hidden', !isRegister);
+  el('register-password-confirm').required = isRegister;
+  el('login-password').autocomplete = isRegister ? 'new-password' : 'current-password';
+  el('login-label').textContent = isRegister ? 'Account erstellen' : 'Anmelden';
+  el('auth-mode-toggle').textContent = isRegister
+    ? 'Zur Anmeldung'
+    : 'Account erstellen';
+}
+
 function showLogin() {
   state.authenticated = false;
+  state.currentUser = null;
   el('app-shell').classList.add('hidden');
   el('login-screen').classList.remove('hidden');
   el('login-password').value = '';
+  el('register-password-confirm').value = '';
+  setAuthMode('login');
   setTimeout(() => el('login-username').focus(), 0);
 }
 
-function showApp() {
+function showApp(user = null) {
   state.authenticated = true;
+  state.currentUser = user;
+  el('current-user').textContent = user?.username || '';
   el('login-screen').classList.add('hidden');
   el('app-shell').classList.remove('hidden');
 }
@@ -51,7 +74,7 @@ async function checkSession() {
   const response = await fetch('/api/session', { credentials: 'same-origin' });
   const data = await response.json();
   if (data.authenticated) {
-    showApp();
+    showApp(data.user || null);
     await loadPresets();
   } else {
     showLogin();
@@ -65,7 +88,7 @@ async function login() {
   const label = el('login-label');
 
   submit.disabled = true;
-  label.innerHTML = '<span class="spinner"></span> Anmeldung läuft …';
+  label.innerHTML = '<span class="spinner"></span> Anmeldung läuft ...';
   try {
     const response = await fetch('/api/login', {
       method: 'POST',
@@ -76,7 +99,7 @@ async function login() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok)
       throw new Error(data.error || 'Anmeldung fehlgeschlagen.');
-    showApp();
+    showApp(data.user || null);
     await loadPresets();
     setStatus('Angemeldet.', 'ok');
   } finally {
@@ -85,11 +108,44 @@ async function login() {
   }
 }
 
+async function register() {
+  const username = el('login-username').value.trim();
+  const password = el('login-password').value;
+  const passwordConfirm = el('register-password-confirm').value;
+  if (password !== passwordConfirm)
+    throw new Error('Passwörter stimmen nicht überein.');
+
+  const submit = el('login-submit');
+  const label = el('login-label');
+
+  submit.disabled = true;
+  label.innerHTML = '<span class="spinner"></span> Account wird erstellt ...';
+  try {
+    const response = await fetch('/api/register', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok)
+      throw new Error(data.error || 'Account konnte nicht erstellt werden.');
+    showApp(data.user || null);
+    await loadPresets();
+    setStatus('Account erstellt.', 'ok');
+  } finally {
+    submit.disabled = false;
+    label.textContent = 'Account erstellen';
+  }
+}
+
 async function logout() {
   await fetch('/api/logout', {
     method: 'POST',
     credentials: 'same-origin',
   });
+  state.presets = [];
+  state.selectedPresetId = '';
   showLogin();
   setStatus('Abgemeldet.');
 }
@@ -293,6 +349,56 @@ async function deletePreset() {
   setStatus('Preset gelöscht.', 'ok');
 }
 
+async function importPresets(file) {
+  if (!file) throw new Error('Bitte eine JSON-Datei auswählen.');
+  if (!file.name.toLowerCase().endsWith('.json'))
+    throw new Error('Bitte eine .json-Datei importieren.');
+
+  let payload;
+  try {
+    payload = JSON.parse(await file.text());
+  } catch (error) {
+    throw new Error('Importdatei enthält kein gültiges JSON.');
+  }
+
+  const response = await apiFetch('/api/presets/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok)
+    throw new Error(data.error || 'Presets konnten nicht importiert werden.');
+
+  await loadPresets();
+  setStatus(
+    `${data.imported} Preset${data.imported === 1 ? '' : 's'} importiert (${data.created} neu, ${data.updated} aktualisiert).`,
+    'ok'
+  );
+}
+
+async function exportPresets() {
+  const response = await apiFetch('/api/presets/export');
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || 'Presets konnten nicht exportiert werden.');
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : 'holy-colours-presets.json';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setStatus('Presets exportiert.', 'ok');
+}
+
 /* ---- Confirm dialog ---- */
 function showConfirm(message) {
   return new Promise((resolve) => {
@@ -447,11 +553,23 @@ el('new-preset').addEventListener('click', () => {
 
 el('save-preset').addEventListener('click', () => run(savePreset));
 el('delete-preset').addEventListener('click', () => run(deletePreset));
+el('export-presets').addEventListener('click', () => run(exportPresets));
+el('import-presets').addEventListener('click', () => {
+  el('import-presets-file').value = '';
+  el('import-presets-file').click();
+});
+el('import-presets-file').addEventListener('change', (event) => {
+  const file = event.target.files[0];
+  if (file) run(() => importPresets(file));
+});
 el('process').addEventListener('click', () => run(processFile));
 el('logout').addEventListener('click', () => run(logout));
+el('auth-mode-toggle').addEventListener('click', () => {
+  setAuthMode(state.authMode === 'login' ? 'register' : 'login');
+});
 el('login-form').addEventListener('submit', (event) => {
   event.preventDefault();
-  run(login);
+  run(state.authMode === 'register' ? register : login);
 });
 
 el('preset-select').addEventListener('change', (event) => {
