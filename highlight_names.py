@@ -23,6 +23,8 @@ HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 UNCOLORED_NAME_NOTE_RE = re.compile(r"(?:^|[\s_-])RETAKE(?:$|[\s_-])", re.IGNORECASE)
 MAX_NAME_SCAN = 200
 DOCUMENT_XML_PATH = "word/document.xml"
+TARGET_FONT_NAME = "Courier New"
+TARGET_FONT_SIZE_HALF_POINTS = "24"
 
 
 def qname(namespace: str, local_name: str) -> str:
@@ -451,21 +453,40 @@ def build_run_with_child(
 ) -> ET.Element:
     new_run = ET.Element(run.tag, dict(run.attrib))
     original_rpr = run.find(qname(W_NS, "rPr"))
-    if original_rpr is not None or color is not None:
-        new_rpr = (
-            copy.deepcopy(original_rpr)
-            if original_rpr is not None
-            else ET.Element(qname(W_NS, "rPr"))
-        )
-        if color is not None:
-            apply_run_background(new_rpr, color)
-        new_run.append(new_rpr)
+    new_rpr = (
+        copy.deepcopy(original_rpr)
+        if original_rpr is not None
+        else ET.Element(qname(W_NS, "rPr"))
+    )
+    apply_target_font(new_rpr)
+    if color is not None:
+        apply_run_background(new_rpr, color)
+    new_run.append(new_rpr)
 
     new_child = copy.deepcopy(child)
     if text_value is not None:
         set_text_value(new_child, text_value)
     new_run.append(new_child)
     return new_run
+
+
+def apply_target_font(rpr: ET.Element) -> None:
+    rfonts = rpr.find(qname(W_NS, "rFonts"))
+    if rfonts is None:
+        rfonts = ET.Element(qname(W_NS, "rFonts"))
+        rpr.insert(0, rfonts)
+
+    for attribute in ("ascii", "hAnsi", "cs", "eastAsia"):
+        rfonts.set(qname(W_NS, attribute), TARGET_FONT_NAME)
+
+    for attribute in ("asciiTheme", "hAnsiTheme", "csTheme", "eastAsiaTheme"):
+        rfonts.attrib.pop(qname(W_NS, attribute), None)
+
+    for tag_name in ("sz", "szCs"):
+        size = rpr.find(qname(W_NS, tag_name))
+        if size is None:
+            size = ET.SubElement(rpr, qname(W_NS, tag_name))
+        size.set(qname(W_NS, "val"), TARGET_FONT_SIZE_HALF_POINTS)
 
 
 def apply_run_background(rpr: ET.Element, color: str) -> None:

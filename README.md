@@ -31,7 +31,7 @@ python3 web_app.py --host 0.0.0.0 --port 8000
 
 ## Docker-Deployment hinter Traefik
 
-Für einen VPS mit bestehendem Traefik wird ein eigenes Docker-Image gebaut. Das Image enthält Python und LibreOffice, damit der PDF-Export im Container funktioniert.
+Für einen VPS mit bestehendem Traefik wird ein eigenes Docker-Image gebaut. Das Image enthält Python, LibreOffice und die Microsoft-Core-Fonts, damit der PDF-Export `Courier New` in 12 pt korrekt rendern kann.
 
 ### DNS vorbereiten
 

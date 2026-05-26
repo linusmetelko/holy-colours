@@ -140,6 +140,32 @@ class HighlightNamesTests(unittest.TestCase):
         self.assertIsNotNone(rfonts)
         self.assertEqual("Courier New", rfonts.get(qname(W_NS, "ascii")))
         self.assertEqual("Courier New", rfonts.get(qname(W_NS, "hAnsi")))
+        self.assertEqual("24", get_run_size(highlighted_run))
+
+    def test_applies_courier_new_12_to_split_runs_without_direct_font(self) -> None:
+        updated_document, _, highlighted_count = hn.process_document_xml(
+            document_xml=build_document_xml(
+                ["<w:p><w:r><w:t>ANNA: Hallo Welt</w:t></w:r></w:p>"]
+            ).encode("utf-8"),
+            name_colors={"ANNA": "FFD966"},
+            fallback_colors=["F4CCCC"],
+        )
+
+        self.assertEqual(1, highlighted_count)
+        root = ET.fromstring(updated_document)
+        paragraph = root.find(f".//{qname(W_NS, 'p')}")
+        runs = paragraph.findall(qname(W_NS, "r"))
+
+        self.assertEqual(["ANNA:", " Hallo Welt"], [run.find(qname(W_NS, "t")).text for run in runs])
+        for run in runs:
+            rfonts = run.find(f"{qname(W_NS, 'rPr')}/{qname(W_NS, 'rFonts')}")
+            self.assertIsNotNone(rfonts)
+            self.assertEqual("Courier New", rfonts.get(qname(W_NS, "ascii")))
+            self.assertEqual("Courier New", rfonts.get(qname(W_NS, "hAnsi")))
+            self.assertEqual("Courier New", rfonts.get(qname(W_NS, "cs")))
+            self.assertEqual("Courier New", rfonts.get(qname(W_NS, "eastAsia")))
+            self.assertEqual("24", get_run_size(run))
+            self.assertEqual("24", get_complex_script_run_size(run))
 
     def test_highlights_multiple_speakers_with_separate_colors(self) -> None:
         updated_document, assigned_fallbacks, highlighted_count = hn.process_document_xml(
@@ -320,6 +346,20 @@ def get_run_fill(run: ET.Element) -> str | None:
     if shading is None:
         return None
     return shading.get(qname(W_NS, "fill"))
+
+
+def get_run_size(run: ET.Element) -> str | None:
+    size = run.find(f"{qname(W_NS, 'rPr')}/{qname(W_NS, 'sz')}")
+    if size is None:
+        return None
+    return size.get(qname(W_NS, "val"))
+
+
+def get_complex_script_run_size(run: ET.Element) -> str | None:
+    size = run.find(f"{qname(W_NS, 'rPr')}/{qname(W_NS, 'szCs')}")
+    if size is None:
+        return None
+    return size.get(qname(W_NS, "val"))
 
 
 def paragraph_text(paragraph: ET.Element) -> str:

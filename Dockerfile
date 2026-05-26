@@ -6,8 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOLY_COLOURS_PORT=8000 \
     HOLY_COLOURS_PRESETS_PATH=/data/presets.json
 
-RUN apt-get update \
+RUN sed -i 's/Components: main/Components: main contrib non-free/g' /etc/apt/sources.list.d/debian.sources \
+    && echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
+        cabextract \
         fontconfig \
         fonts-crosextra-caladea \
         fonts-crosextra-carlito \
@@ -15,6 +18,8 @@ RUN apt-get update \
         fonts-liberation2 \
         fonts-noto-core \
         libreoffice-writer \
+        ttf-mscorefonts-installer \
+    && fc-cache -f \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
